@@ -104,6 +104,24 @@ function Remove-CbsofPackages {
 $dsp = Get-DspDevice
 if (-not $dsp) { throw "The DSP device (CSAUDIO\ADSP...) was not found. Is Coolstar's sklhdaudbus installed?" }
 
+# Check the tools BEFORE changing anything, so a missing file can never leave
+# the DSP device disabled half-way through.
+Get-ChildItem $here -Recurse -File | Unblock-File -ErrorAction SilentlyContinue
+if (-not (Test-Path $devcon)) {
+    "devcon.exe is missing from $here, so nothing was changed."
+    "Windows Defender may have quarantined it: Windows Security > Virus & threat protection >"
+    "Protection history > restore devcon.exe (Microsoft's driver tool), then run this again."
+    if ($dsp.Status -ne "OK") {
+        pnputil /enable-device "$($dsp.InstanceId)" | Out-Null
+        "(The DSP device was not running, so it has been re-enabled.)"
+    }
+    return
+}
+if (-not $Restore -and -not (Test-Path (Join-Path $here "cbsof\cbsof.inf"))) {
+    "cbsof\cbsof.inf is missing from $here, so nothing was changed. Extract the whole zip again."
+    return
+}
+
 if ($Restore) {
     $cool = Get-ChildItem "$env:SystemRoot\System32\DriverStore\FileRepository" -Directory -Filter "csaudiointcsof.inf_amd64_*" |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
