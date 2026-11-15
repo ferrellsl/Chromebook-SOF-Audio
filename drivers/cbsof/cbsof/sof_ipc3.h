@@ -60,6 +60,14 @@ struct sof_ext_man_header {
     UINT32 header_version;
 };
 
+#define SOF_EXT_MAN_ELEM_FW_VERSION 0
+#define SOF_EXT_MAN_ELEM_WINDOW     1
+
+struct sof_ext_man_elem_header {
+    UINT32 type;
+    UINT32 size;    // including this header
+};
+
 struct sof_ipc_hdr {
     UINT32 size;
 };

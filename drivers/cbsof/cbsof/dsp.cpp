@@ -168,6 +168,8 @@ static void IpcIntEnable(PCBSOF_CONTEXT ctx, BOOLEAN enable)
     DspUpdate(ctx, DSP_REG_ADSPIC, ADSPIC_IPC, enable ? ADSPIC_IPC : 0);
 }
 
+static void ParseExtManifest(PCBSOF_CONTEXT ctx, const UCHAR* fw, ULONG fwSize);
+
 // ---------------------------------------------------------------------------
 // Firmware file
 // ---------------------------------------------------------------------------
@@ -326,6 +328,14 @@ NTSTATUS DspBoot(PCBSOF_CONTEXT ctx)
         goto out;
     }
     payloadSize = fwSize - payloadOff;
+
+    ctx->HostBoxOffset = ctx->HostBoxSize = 0;
+    ctx->DspBoxOffset = ctx->DspBoxSize = 0;
+    ctx->StreamBoxOffset = ctx->StreamBoxSize = 0;
+    ParseExtManifest(ctx, fw, fwSize);
+    CbLog(ctx, "manifest windows: host->dsp 0x%X/%u, dsp->host 0x%X/%u, stream 0x%X/%u",
+          ctx->HostBoxOffset, ctx->HostBoxSize, ctx->DspBoxOffset, ctx->DspBoxSize,
+          ctx->StreamBoxOffset, ctx->StreamBoxSize);
     CbLog(ctx, "firmware %u bytes, ext manifest 0x%X, payload %u bytes", fwSize, payloadOff, payloadSize);
 
     // Code loader stream: 48 kHz, 32-bit, mono (HDA_CL_STREAM_FORMAT 0x40).
@@ -467,7 +477,11 @@ static void MboxRead(PCBSOF_CONTEXT ctx, ULONG off, void* dst, ULONG len)
         RtlZeroMemory(dst, len);
         return;
     }
-    READ_REGISTER_BUFFER_UCHAR(ctx->DspBar + off, (PUCHAR)dst, len);
+    if ((len & 3) == 0 && (off & 3) == 0) {
+        READ_REGISTER_BUFFER_ULONG((volatile ULONG*)(ctx->DspBar + off), (PULONG)dst, len / 4);
+    } else {
+        READ_REGISTER_BUFFER_UCHAR(ctx->DspBar + off, (PUCHAR)dst, len);
+    }
 }
 
 static void MboxWrite(PCBSOF_CONTEXT ctx, ULONG off, const void* src, ULONG len)
@@ -475,7 +489,11 @@ static void MboxWrite(PCBSOF_CONTEXT ctx, ULONG off, const void* src, ULONG len)
     if (!InBar(ctx, off, len)) {
         return;
     }
-    WRITE_REGISTER_BUFFER_UCHAR(ctx->DspBar + off, (PUCHAR)src, len);
+    if ((len & 3) == 0 && (off & 3) == 0) {
+        WRITE_REGISTER_BUFFER_ULONG((volatile ULONG*)(ctx->DspBar + off), (PULONG)src, len / 4);
+    } else {
+        WRITE_REGISTER_BUFFER_UCHAR(ctx->DspBar + off, (PUCHAR)src, len);
+    }
 }
 
 // Called by sklhdaudbus from its ISR, at DIRQL. Latch and mask only.
@@ -516,6 +534,58 @@ BOOL DspInterruptCallback(PVOID callbackContext)
     return TRUE;
 }
 
+static void ApplyWindows(PCBSOF_CONTEXT ctx, const sof_ipc_window* win)
+{
+    ULONG count = min(win->num_windows, (UINT32)SOF_IPC_MAX_ELEMS);
+    for (ULONG i = 0; i < count; i++) {
+        const sof_ipc_window_elem* e = &win->window[i];
+        ULONG woff = SRAM_WINDOW_OFFSET(e->id) + e->offset;
+        switch (e->type) {
+        case SOF_IPC_REGION_UPBOX:
+            ctx->DspBoxOffset = woff;
+            ctx->DspBoxSize = e->size;
+            break;
+        case SOF_IPC_REGION_DOWNBOX:
+            ctx->HostBoxOffset = woff;
+            ctx->HostBoxSize = e->size;
+            break;
+        case SOF_IPC_REGION_STREAM:
+            ctx->StreamBoxOffset = woff;
+            ctx->StreamBoxSize = e->size;
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+// SOF 1.7+ publishes the mailbox windows in the firmware file's extended
+// manifest rather than in FW_READY (ipc3_fw_ext_man_get_windows in Linux).
+static void ParseExtManifest(PCBSOF_CONTEXT ctx, const UCHAR* fw, ULONG fwSize)
+{
+    const sof_ext_man_header* xman = (const sof_ext_man_header*)fw;
+    if (fwSize < sizeof(*xman) || xman->magic != SOF_EXT_MAN_MAGIC_NUMBER ||
+        xman->full_size > fwSize || xman->header_size < sizeof(*xman)) {
+        return;
+    }
+    ULONG off = xman->header_size;
+    while (off + sizeof(sof_ext_man_elem_header) <= xman->full_size) {
+        const sof_ext_man_elem_header* elem = (const sof_ext_man_elem_header*)(fw + off);
+        if (elem->size < sizeof(*elem) || elem->size > xman->full_size - off) {
+            break;
+        }
+        if (elem->type == SOF_EXT_MAN_ELEM_WINDOW &&
+            elem->size >= sizeof(*elem) + FIELD_OFFSET(sof_ipc_window, window)) {
+            sof_ipc_window win;
+            RtlZeroMemory(&win, sizeof(win));
+            RtlCopyMemory(&win, fw + off + sizeof(*elem),
+                          min(elem->size - (ULONG)sizeof(*elem), (ULONG)sizeof(win)));
+            ApplyWindows(ctx, &win);
+        }
+        off += elem->size;
+    }
+}
+
 static void ParseFwReady(PCBSOF_CONTEXT ctx)
 {
     MboxRead(ctx, DSP_MBOX_UPLINK_OFFSET, &ctx->FwReadyMsg, sizeof(ctx->FwReadyMsg));
@@ -533,27 +603,7 @@ static void ParseFwReady(PCBSOF_CONTEXT ctx)
             sof_ipc_window win;
             RtlZeroMemory(&win, sizeof(win));
             MboxRead(ctx, off, &win, min(ext.hdr.size, (UINT32)sizeof(win)));
-            ULONG count = min(win.num_windows, (UINT32)SOF_IPC_MAX_ELEMS);
-            for (ULONG i = 0; i < count; i++) {
-                const sof_ipc_window_elem* e = &win.window[i];
-                ULONG woff = SRAM_WINDOW_OFFSET(e->id) + e->offset;
-                switch (e->type) {
-                case SOF_IPC_REGION_UPBOX:
-                    ctx->DspBoxOffset = woff;
-                    ctx->DspBoxSize = e->size;
-                    break;
-                case SOF_IPC_REGION_DOWNBOX:
-                    ctx->HostBoxOffset = woff;
-                    ctx->HostBoxSize = e->size;
-                    break;
-                case SOF_IPC_REGION_STREAM:
-                    ctx->StreamBoxOffset = woff;
-                    ctx->StreamBoxSize = e->size;
-                    break;
-                default:
-                    break;
-                }
-            }
+            ApplyWindows(ctx, &win);
         }
         off += ext.hdr.size;
     }
