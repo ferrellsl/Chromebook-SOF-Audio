@@ -14,7 +14,9 @@
 # Only the DSP device (CSAUDIO\ADSP...) is forced onto cbsof. Older cbsof
 # packages are removed from the driver store, so a Windows rollback never goes
 # to an old cbsof.
-param([switch]$Restore, [switch]$ShowLog, [switch]$ClearGuard, [switch]$Setup, [switch]$Uninstall)
+#   (-Finish runs once at startup, from a task -Setup registers, when -Setup
+#    had to turn test signing on: the swap only works once that is active.)
+param([switch]$Restore, [switch]$ShowLog, [switch]$ClearGuard, [switch]$Setup, [switch]$Uninstall, [switch]$Finish)
 
 $ErrorActionPreference = "Stop"
 $here = $PSScriptRoot
@@ -104,16 +106,23 @@ using System;
 using System.Runtime.InteropServices;
 public static class CbsofNewDev {
     [DllImport("newdev.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    public static extern bool UpdateDriverForPlugAndPlayDevicesW(IntPtr hwnd, string hardwareId,
+    static extern bool UpdateDriverForPlugAndPlayDevicesW(IntPtr hwnd, string hardwareId,
         string fullInfPath, uint installFlags, out bool rebootRequired);
+    // Returns 0 on success, else the Win32 / SetupAPI error, read right after
+    // the call (PowerShell would lose it in between).
+    public static int Update(string hardwareId, string inf, out bool reboot) {
+        if (UpdateDriverForPlugAndPlayDevicesW(IntPtr.Zero, hardwareId, inf, 1, out reboot))   // INSTALLFLAG_FORCE
+            return 0;
+        int e = Marshal.GetLastWin32Error();
+        return e == 0 ? -1 : e;
+    }
 }
 "@
 function Update-DriverForced($inf, $id) {
     if (-not ("CbsofNewDev" -as [type])) { Add-Type -TypeDefinition $newdevSrc }
     $reboot = $false
-    $ok = [CbsofNewDev]::UpdateDriverForPlugAndPlayDevicesW([IntPtr]::Zero, $id, $inf, 1, [ref]$reboot)   # INSTALLFLAG_FORCE
-    $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-    [pscustomobject]@{ Ok = $ok; Error = ('0x{0:X8}' -f $err); Reboot = $reboot }
+    $err = [CbsofNewDev]::Update($id, $inf, [ref]$reboot)
+    [pscustomobject]@{ Ok = ($err -eq 0); Error = ('0x{0:X8}' -f $err); Reboot = $reboot }
 }
 
 # Only for Gemini Lake Chromebooks: the audio DSP PCI device must be present.
@@ -129,8 +138,19 @@ if (-not $Restore -and -not $Uninstall -and -not (Test-Path (Join-Path $here "cb
     exit 2
 }
 
-$mode = if ($Setup) { "setup" } elseif ($Uninstall) { "uninstall" } elseif ($Restore) { "restore" } else { "install" }
-"$(Get-Date) $mode from $here" | Out-File $progress
+$mode = if ($Setup) { "setup" } elseif ($Uninstall) { "uninstall" } elseif ($Restore) { "restore" } elseif ($Finish) { "finish (after restart)" } else { "install" }
+if ($Finish) { "$(Get-Date) $mode" | Out-File $progress -Append } else { "$(Get-Date) $mode from $here" | Out-File $progress }
+
+$taskName = "Chromebook SOF Audio - finish setup"
+function Remove-FinishTask {
+    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+}
+
+if ($Finish) {
+    # At startup the bus driver may still be creating the DSP device.
+    for ($i = 0; $i -lt 90 -and -not (Get-DspDevice); $i++) { Start-Sleep -Seconds 1 }
+    Start-Sleep -Seconds 10
+}
 
 if ($Setup) {
     # Secure Boot blocks test-signed drivers, so nothing below would help.
@@ -141,9 +161,11 @@ if ($Setup) {
         exit 3
     }
     $bcd = bcdedit /enum "{current}" | Out-String
+    $deferSwap = $false
     if ($bcd -notmatch "testsigning\s+Yes") {
         bcdedit /set testsigning on | Out-Null
         Step "test signing turned on (takes effect after the restart)"
+        $deferSwap = $true
     }
     $cer = Join-Path $here "cbsof-test.cer"
     Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
@@ -156,7 +178,22 @@ if ($Setup) {
         pnputil /add-driver $inf /install 2>&1 | Out-Null
         Step "$n driver added (pnputil exit $LASTEXITCODE)"
     }
-} elseif (-not $Uninstall -and -not $Restore) {
+    if ($deferSwap) {
+        # A test-signed driver cannot take over the DSP device until test
+        # signing is active, i.e. after the restart. Stage it now and let a
+        # one-time startup task (as SYSTEM) do the swap.
+        pnputil /add-driver (Join-Path $here "cbsof\cbsof.inf") 2>&1 | Out-Null
+        $ps = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+        $script = Join-Path $here "install-on-chromebook.ps1"
+        Remove-FinishTask
+        $action = New-ScheduledTaskAction -Execute $ps -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -Finish"
+        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+        Step "cbsof staged; it takes over the DSP device at the next startup"
+        exit 0
+    }
+} elseif (-not $Uninstall -and -not $Restore -and -not $Finish) {
     $bcd = bcdedit /enum "{current}" | Out-String
     if ($bcd -notmatch "testsigning\s+Yes") {
         "Test signing is OFF. Turn it on, restart, then run this script again:"
@@ -179,6 +216,7 @@ if (-not $dsp) {
                 pnputil /delete-driver $m.Groups[1].Value /force 2>&1 | Out-Null
             }
             Step "cbsof packages removed"
+            Remove-FinishTask
             exit 0
         }
         exit 2
@@ -191,6 +229,7 @@ if (-not $dsp) {
 }
 
 if ($Uninstall) {
+    Remove-FinishTask
     Step "disabling the DSP device"
     pnputil /disable-device "$($dsp.InstanceId)" | Out-Null
     Remove-CbsofPackages
@@ -236,6 +275,7 @@ Start-Sleep -Seconds 3
 Step "installing $(Join-Path $here 'cbsof\cbsof.inf')"
 $u = Update-DriverForced (Join-Path $here "cbsof\cbsof.inf") $hwid
 Step "driver update: ok=$($u.Ok) error=$($u.Error) reboot=$($u.Reboot)"
+if ($Finish) { Remove-FinishTask }
 if (-not $u.Ok) {
     Step "installing cbsof failed; the DSP device stays on its previous driver"
     exit 4
