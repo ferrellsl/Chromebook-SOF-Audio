@@ -45,6 +45,7 @@ static PKTHREAD g_Thread = NULL;
 static HANDLE g_FileHandle = NULL;
 static volatile LONG g_Stopping = 0;
 static WCHAR g_LinkName[256];
+static KEVENT g_StopEvent;                   // set by SofJackStop; wakes a waiting read
 
 static void JackLog(const char* fmt, ...)
 {
@@ -76,6 +77,7 @@ void SofSetJackCallback(ULONG Slot, SOF_JACK_CALLBACK Callback, PVOID Context)
     }
     if (!g_LockInit) {
         KeInitializeGuardedMutex(&g_JackLock);
+        KeInitializeEvent(&g_StopEvent, NotificationEvent, FALSE);
         g_LockInit = TRUE;
     }
     KeAcquireGuardedMutex(&g_JackLock);
@@ -121,6 +123,56 @@ static BOOLEAN ContainsNoCase(PCUNICODE_STRING hay, PCWSTR needle)
 }
 
 // ---------------------------------------------------------------------------
+// One report read with our own IRP, so a stop can cancel it. If writeHandle is
+// given, the state request is sent once the read is waiting for the answer.
+// ---------------------------------------------------------------------------
+static NTSTATUS ReadReport(PDEVICE_OBJECT dev, PFILE_OBJECT fo, PUCHAR buf, ULONG len, PULONG got,
+                           HANDLE writeHandle, HANDLE writeEvent)
+{
+    *got = 0;
+    KEVENT done;
+    KeInitializeEvent(&done, NotificationEvent, FALSE);
+    IO_STATUS_BLOCK iosb = {};
+    LARGE_INTEGER offset = {};
+    PIRP irp = IoBuildSynchronousFsdRequest(IRP_MJ_READ, dev, buf, len, &offset, &done, &iosb);
+    if (!irp) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    IoGetNextIrpStackLocation(irp)->FileObject = fo;
+    NTSTATUS status = IoCallDriver(dev, irp);
+    if (status == STATUS_PENDING) {
+        if (writeHandle) {
+            UCHAR req[DA7219_OUT_REPORT_BYTES] = { DA7219_REPORTID_SPECKEYS, 0 };
+            IO_STATUS_BLOCK wiosb = {};
+            LARGE_INTEGER woff = {};
+            ZwClearEvent(writeEvent);
+            NTSTATUS ws = ZwWriteFile(writeHandle, writeEvent, NULL, NULL, &wiosb, req, sizeof(req), &woff, NULL);
+            if (ws == STATUS_PENDING) {
+                LARGE_INTEGER t;
+                t.QuadPart = -10LL * 1000 * 1000;   // 1 s
+                ws = ZwWaitForSingleObject(writeEvent, FALSE, &t) == STATUS_TIMEOUT ? STATUS_TIMEOUT : wiosb.Status;
+            }
+            if (!NT_SUCCESS(ws) || ws == STATUS_TIMEOUT) {
+                JackLog("state request failed 0x%08X (state known after the next plug event)", ws);
+            }
+        }
+        PVOID objs[2] = { &done, &g_StopEvent };
+        NTSTATUS w = KeWaitForMultipleObjects(2, objs, WaitAny, Executive, KernelMode, FALSE, NULL, NULL);
+        if (w == STATUS_WAIT_1) {
+            // Stopping: cancel our read and wait for it to come back (the IRP
+            // points at locals, so it must finish before we return).
+            IoCancelIrp(irp);
+            KeWaitForSingleObject(&done, Executive, KernelMode, FALSE, NULL);
+        }
+        status = iosb.Status;
+    }
+    if (NT_SUCCESS(status)) {
+        *got = (ULONG)iosb.Information;
+    }
+    return status;
+}
+
+// ---------------------------------------------------------------------------
 // Listener thread: open the collection, ask for the current state, read reports
 // ---------------------------------------------------------------------------
 static KSTART_ROUTINE JackThread;
@@ -146,60 +198,49 @@ static VOID JackThread(PVOID StartContext)
     JackLog("listening to the DA7219 jack device");
 
     {
-        // Separate events: the read and the state request are in flight at
-        // the same time, so the file object's own signal would be ambiguous.
-        HANDLE readEvent = NULL, writeEvent = NULL;
-        OBJECT_ATTRIBUTES eoa;
-        InitializeObjectAttributes(&eoa, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
-        if (!NT_SUCCESS(ZwCreateEvent(&readEvent, EVENT_ALL_ACCESS, &eoa, NotificationEvent, FALSE)) ||
-            !NT_SUCCESS(ZwCreateEvent(&writeEvent, EVENT_ALL_ACCESS, &eoa, NotificationEvent, FALSE))) {
-            JackLog("cannot create events");
-            if (readEvent) ZwClose(readEvent);
+        // Reads use our own IRP so a stop can cancel them (0.5.2 hung the
+        // device stop: closing the handle does not cancel a pending HID read).
+        PFILE_OBJECT fo = NULL;
+        status = ObReferenceObjectByHandle(file, 0, *IoFileObjectType, KernelMode, (PVOID*)&fo, NULL);
+        if (!NT_SUCCESS(status)) {
+            JackLog("cannot reference the jack device file (0x%08X)", status);
             goto out;
         }
-        UCHAR report[DA7219_IN_REPORT_BYTES];
+        PDEVICE_OBJECT dev = IoGetRelatedDeviceObject(fo);
+        PUCHAR report = (PUCHAR)ExAllocatePool2(POOL_FLAG_NON_PAGED, 16, CBSOF_POOL_TAG);
+        HANDLE writeEvent = NULL;
+        OBJECT_ATTRIBUTES eoa;
+        InitializeObjectAttributes(&eoa, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+        if (!report || !NT_SUCCESS(ZwCreateEvent(&writeEvent, EVENT_ALL_ACCESS, &eoa, NotificationEvent, FALSE))) {
+            JackLog("out of resources");
+            if (report) ExFreePoolWithTag(report, CBSOF_POOL_TAG);
+            ObDereferenceObject(fo);
+            goto out;
+        }
         BOOLEAN asked = FALSE;
 
         while (!g_Stopping) {
-            RtlZeroMemory(report, sizeof(report));
-            ZwClearEvent(readEvent);
-            IO_STATUS_BLOCK riosb = {};
-            LARGE_INTEGER offset = {};
-            status = ZwReadFile(file, readEvent, NULL, NULL, &riosb, report, sizeof(report), &offset, NULL);
-            if (status == STATUS_PENDING) {
-                if (!asked) {
-                    // Ask for the current state now that a read is waiting for it.
-                    UCHAR req[DA7219_OUT_REPORT_BYTES] = { DA7219_REPORTID_SPECKEYS, 0 };
-                    IO_STATUS_BLOCK wiosb = {};
-                    LARGE_INTEGER woff = {};
-                    ZwClearEvent(writeEvent);
-                    NTSTATUS ws = ZwWriteFile(file, writeEvent, NULL, NULL, &wiosb, req, sizeof(req), &woff, NULL);
-                    if (ws == STATUS_PENDING) {
-                        ZwWaitForSingleObject(writeEvent, FALSE, NULL);
-                        ws = wiosb.Status;
-                    }
-                    if (!NT_SUCCESS(ws)) {
-                        JackLog("state request failed 0x%08X (state known after the next plug event)", ws);
-                    }
-                    asked = TRUE;
-                }
-                ZwWaitForSingleObject(readEvent, FALSE, NULL);
-                status = riosb.Status;
-            }
-            if (!NT_SUCCESS(status)) {
-                if (!g_Stopping) {
-                    JackLog("read ended 0x%08X (device removed?)", status);
-                }
+            RtlZeroMemory(report, 16);
+            ULONG got = 0;
+            status = ReadReport(dev, fo, report, DA7219_IN_REPORT_BYTES, &got,
+                                asked ? NULL : file, asked ? NULL : writeEvent);
+            asked = TRUE;
+            if (status == STATUS_CANCELLED && g_Stopping) {
                 break;
             }
-            JackLog("report %02X %02X %02X (%u bytes)", report[0], report[1], report[2], (ULONG)riosb.Information);
-            if (riosb.Information >= DA7219_IN_REPORT_BYTES &&
+            if (!NT_SUCCESS(status)) {
+                JackLog("read ended 0x%08X (device removed?)", status);
+                break;
+            }
+            JackLog("report %02X %02X %02X (%u bytes)", report[0], report[1], report[2], got);
+            if (got >= DA7219_IN_REPORT_BYTES &&
                 report[0] == DA7219_REPORTID_SPECKEYS && report[1] == DA7219_CONTROL_JACK_TYPE) {
                 SetJackState((report[2] & DA7219_JACK_HEADPHONE) != 0);
             }
         }
-        ZwClose(readEvent);
         ZwClose(writeEvent);
+        ExFreePoolWithTag(report, CBSOF_POOL_TAG);
+        ObDereferenceObject(fo);
     }
 
 out:
@@ -285,12 +326,14 @@ NTSTATUS SofJackStart(PDRIVER_OBJECT DriverObject)
 {
     if (!g_LockInit) {
         KeInitializeGuardedMutex(&g_JackLock);
+        KeInitializeEvent(&g_StopEvent, NotificationEvent, FALSE);
         g_LockInit = TRUE;
     }
     if (g_NotifyHandle) {
         return STATUS_SUCCESS;
     }
     g_Stopping = 0;
+    KeClearEvent(&g_StopEvent);
     NTSTATUS status = IoRegisterPlugPlayNotification(EventCategoryDeviceInterfaceChange,
                                                      PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES,
                                                      (PVOID)&GUID_DEVINTERFACE_HID, DriverObject,
@@ -314,12 +357,17 @@ void SofJackStop(void)
         IoUnregisterPlugPlayNotificationEx(g_NotifyHandle);
         g_NotifyHandle = NULL;
     }
-    // Closing the handle cancels the pending read; the thread then exits.
-    KeAcquireGuardedMutex(&g_JackLock);
-    if (g_FileHandle) {
-        ZwClose(g_FileHandle);
-        g_FileHandle = NULL;
+    // Wake the listener; it cancels its own pending read and exits.
+    KeSetEvent(&g_StopEvent, IO_NO_INCREMENT, FALSE);
+    if (g_Thread) {
+        LARGE_INTEGER t;
+        t.QuadPart = -50LL * 1000 * 1000;   // 5 s
+        if (KeWaitForSingleObject(g_Thread, Executive, KernelMode, FALSE, &t) == STATUS_TIMEOUT) {
+            // Unloading with the thread alive would crash, so keep waiting,
+            // but leave a trace in the log first.
+            JackLog("listener did not stop within 5 s; still waiting");
+        }
     }
-    KeReleaseGuardedMutex(&g_JackLock);
     ReapThread();
+    JackLog("stopped");
 }

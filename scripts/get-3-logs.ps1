@@ -7,7 +7,7 @@ Get-Content C:\Windows\INF\setupapi.dev.log -Tail 400 | Out-File (Join-Path $her
 
 pnputil /enum-drivers | Select-String -Context 0,6 'cbsof' | Out-File (Join-Path $here "packages.txt")
 
-& powershell -ExecutionPolicy Bypass -File D:\dev\cbsof-0.4.5\install-on-chromebook.ps1 -ShowLog |
+& powershell -ExecutionPolicy Bypass -File (Join-Path $here "install-on-chromebook.ps1") -ShowLog |
     Out-File (Join-Path $here "log.txt")
 
 "Done: setupapi.txt, packages.txt and log.txt are in $here"
