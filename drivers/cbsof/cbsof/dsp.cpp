@@ -696,14 +696,16 @@ NTSTATUS IpcTx(PCBSOF_CONTEXT ctx, const void* msg, ULONG len, ULONG timeoutMs)
 // Send a message and check the reply's error field. Logs failures.
 NTSTATUS IpcTxCheck(PCBSOF_CONTEXT ctx, const void* msg, ULONG len, const char* what)
 {
+    KeWaitForSingleObject(&ctx->IpcMutex, Executive, KernelMode, FALSE, NULL);
     NTSTATUS status = IpcTx(ctx, msg, len, 500);
-    const sof_ipc_reply* reply = (const sof_ipc_reply*)ctx->ReplyBuf;
+    INT32 error = ((const sof_ipc_reply*)ctx->ReplyBuf)->error;
+    KeReleaseMutex(&ctx->IpcMutex, FALSE);
     if (!NT_SUCCESS(status)) {
         CbLog(ctx, "IPC %s (cmd 0x%08X): send failed 0x%08X", what, ((const sof_ipc_cmd_hdr*)msg)->cmd, status);
         return status;
     }
-    if (reply->error != 0) {
-        CbLog(ctx, "IPC %s (cmd 0x%08X): firmware error %d", what, ((const sof_ipc_cmd_hdr*)msg)->cmd, reply->error);
+    if (error != 0) {
+        CbLog(ctx, "IPC %s (cmd 0x%08X): firmware error %d", what, ((const sof_ipc_cmd_hdr*)msg)->cmd, error);
         return STATUS_UNSUCCESSFUL;
     }
     if (ctx->PanicCode) {

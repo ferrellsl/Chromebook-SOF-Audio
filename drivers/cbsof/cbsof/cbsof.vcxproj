@@ -44,24 +44,39 @@
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
       <TreatWarningAsError>true</TreatWarningAsError>
-      <PreprocessorDefinitions>POOL_ZERO_DOWN_LEVEL_SUPPORT;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\pc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_WIN32;UNICODE;_UNICODE;PC_IMPLEMENTATION;_NEW_DELETE_OPERATORS_;DEBUG_LEVEL=DEBUGLVL_TERSE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>%(AdditionalDependencies);$(DDK_LIB_PATH)\portcls.lib;$(DDK_LIB_PATH)\stdunk.lib;$(DDK_LIB_PATH)\libcntpr.lib</AdditionalDependencies>
     </Link>
     <DriverSign>
       <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
     </DriverSign>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="driver.cpp" />
+    <!-- SOF DSP side -->
     <ClCompile Include="dsp.cpp" />
-    <ClCompile Include="tone.cpp" />
+    <ClCompile Include="sofdevice.cpp" />
+    <ClCompile Include="sofpcm.cpp" />
+    <!-- PortCls endpoints, from Microsoft SimpleAudioSample (MS-PL) -->
+    <ClCompile Include="pc\adapter.cpp" />
+    <ClCompile Include="pc\common.cpp" />
+    <ClCompile Include="pc\basetopo.cpp" />
+    <ClCompile Include="pc\mintopo.cpp" />
+    <ClCompile Include="pc\minwavert.cpp" />
+    <ClCompile Include="pc\minwavertstream.cpp" />
+    <ClCompile Include="pc\NewDelete.cpp" />
+    <ClCompile Include="pc\kshelper.cpp" />
+    <ClCompile Include="pc\speakertopo.cpp" />
+    <ClCompile Include="pc\micarraytopo.cpp" />
+    <ClCompile Include="pc\hw.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="driver.h" />
     <ClInclude Include="regs.h" />
     <ClInclude Include="sof_ipc3.h" />
+    <ClInclude Include="sofapi.h" />
   </ItemGroup>
   <ItemGroup>
     <Inf Include="cbsof.inf" />

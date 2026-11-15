@@ -1,63 +1,130 @@
 ;
-; cbsof.inf - open SOF audio DSP driver for Gemini Lake Chromebooks
-; Milestone 3 bring-up build: boots the DSP, loads the speaker pipeline, plays a 3 s test tone.
+; cbsof.inf - open SOF audio driver for Gemini Lake Chromebooks
+; Milestone 4a: Windows "Speakers" endpoint on the SOF speaker pipeline.
+; Based on Microsoft SimpleAudioSample.inx (MS-PL).
 ;
 
 [Version]
-Signature   = "$WINDOWS NT$"
+Signature   = "$Windows NT$"
 Class       = MEDIA
 ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
 Provider    = %ProviderName%
-DriverVer   = 11/14/2026,0.3.0.0
+DriverVer   = 11/14/2026,0.4.0.0
 CatalogFile = cbsof.cat
 PnpLockdown = 1
 
-[DestinationDirs]
-DefaultDestDir = 12
-Cbsof_Fw_Dir   = 12,cbsof
-
 [SourceDisksNames]
-1 = %DiskName%,,,""
+222 = %DiskName%,"",222
 
 [SourceDisksFiles]
-cbsof.sys  = 1,,
-sof-glk.ri = 1,,
-spk.cbtp   = 1,,
+cbsof.sys  = 222
+sof-glk.ri = 222
+spk.cbtp   = 222
+
+[SignatureAttributes]
+cbsof.sys = SignatureAttributes.DRM
+
+[SignatureAttributes.DRM]
+DRMLevel = 1300
+
+[SignatureAttributes.PETrust]
+PETrust = true
 
 [Manufacturer]
-%ProviderName% = Standard,NT$ARCH$.10.0...16299
+%MfgName% = CBSOF,NT$ARCH$.10.0...16299
 
-[Standard.NT$ARCH$.10.0...16299]
-%Cbsof.DeviceDesc% = Cbsof_Device, CSAUDIO\ADSP&CTLR_VEN_8086&CTLR_DEV_3198
+[CBSOF.NT$ARCH$.10.0...16299]
+%CBSOF.DeviceDesc% = CBSOF_SA, CSAUDIO\ADSP&CTLR_VEN_8086&CTLR_DEV_3198
 
-[Cbsof_Device.NT]
-CopyFiles = Cbsof_Sys, Cbsof_Fw_Dir
+[DestinationDirs]
+CBSOF_SA.CopyList = 12
+CBSOF_SA.FwList   = 12,cbsof
 
-[Cbsof_Sys]
+[CBSOF_SA.CopyList]
 cbsof.sys
 
-[Cbsof_Fw_Dir]
+[CBSOF_SA.FwList]
 sof-glk.ri
 spk.cbtp
 
-[Cbsof_Device.NT.Services]
+[CBSOF_SA.AddReg]
+HKR,,AssociatedFilters,,"wdmaud,swmidi,redbook"
+HKR,,Driver,,cbsof.sys
+HKR,Drivers,SubClasses,,"wave,midi,mixer"
+HKR,Drivers\wave\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\midi\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\mixer\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\wave\wdmaud.drv,Description,,%CBSOF.DeviceDesc%
+HKR,Drivers\mixer\wdmaud.drv,Description,,%CBSOF.DeviceDesc%
+
+[CBSOF.I.WaveSpeaker]
+AddReg = CBSOF.I.WaveSpeaker.AddReg
+
+[CBSOF.I.WaveSpeaker.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%CBSOF.WaveSpeaker.szPname%
+
+[CBSOF.I.TopologySpeaker]
+AddReg = CBSOF.I.TopologySpeaker.AddReg
+
+[CBSOF.I.TopologySpeaker.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%CBSOF.TopologySpeaker.szPname%
+HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+
+[CBSOF_SA.NT]
+Include = ks.inf,wdmaudio.inf
+Needs   = KS.Registration, WDMAUDIO.Registration
+CopyFiles = CBSOF_SA.CopyList, CBSOF_SA.FwList
+AddReg  = CBSOF_SA.AddReg
+
+[CBSOF_SA.NT.Interfaces]
+AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_WaveSpeaker%,     CBSOF.I.WaveSpeaker
+AddInterface = %KSCATEGORY_RENDER%,   %KSNAME_WaveSpeaker%,     CBSOF.I.WaveSpeaker
+AddInterface = %KSCATEGORY_REALTIME%, %KSNAME_WaveSpeaker%,     CBSOF.I.WaveSpeaker
+AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_TopologySpeaker%, CBSOF.I.TopologySpeaker
+AddInterface = %KSCATEGORY_TOPOLOGY%, %KSNAME_TopologySpeaker%, CBSOF.I.TopologySpeaker
+
+[CBSOF_SA.NT.Services]
 AddService = cbsof, 0x00000002, Cbsof_Service_Inst
 
 [Cbsof_Service_Inst]
-DisplayName   = %Cbsof.SvcDesc%
-ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
-StartType     = 3               ; SERVICE_DEMAND_START
-ErrorControl  = 1               ; SERVICE_ERROR_NORMAL
+DisplayName   = %CBSOF.SvcDesc%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
 ServiceBinary = %12%\cbsof.sys
 
-[Cbsof_Device.NT.Wdf]
-KmdfService = cbsof, Cbsof_WdfSect
+[CBSOF_SA.NT.HW]
+AddReg = AUDIOHW.AddReg
 
-[Cbsof_WdfSect]
+[AUDIOHW.AddReg]
+HKR,,DeviceType,0x10001,0x0000001D
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GRGWGX;;;BA)(A;;GRGWGX;;;WD)(A;;GRGWGX;;;RC)"
+
+[CBSOF_SA.NT.Wdf]
+KmdfService = cbsof, CBSOF_SA_WdfSect
+
+[CBSOF_SA_WdfSect]
 KmdfLibraryVersion = $KMDFVERSION$
 
 [Strings]
-ProviderName     = "Chromebook SOF Audio (open)"
-DiskName         = "Chromebook SOF Audio Disk"
-Cbsof.DeviceDesc = "Chromebook SOF Audio DSP (open, bring-up)"
-Cbsof.SvcDesc    = "Chromebook SOF Audio DSP"
+KSNAME_WaveSpeaker     = "WaveSpeaker"
+KSNAME_TopologySpeaker = "TopologySpeaker"
+
+Proxy.CLSID          = "{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
+KSCATEGORY_AUDIO     = "{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
+KSCATEGORY_RENDER    = "{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_CAPTURE   = "{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_REALTIME  = "{EB115FFC-10C8-4964-831D-6DCB02E6F23F}"
+KSCATEGORY_TOPOLOGY  = "{DDA54A40-1E4C-11D1-A050-405705C10000}"
+KSNODETYPE_ANY       = "{00000000-0000-0000-0000-000000000000}"
+PKEY_AudioEndpoint_Association = "{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E},2"
+
+ProviderName = "Chromebook SOF Audio (open)"
+MfgName      = "Chromebook SOF Audio (open)"
+DiskName     = "Chromebook SOF Audio Disk"
+CBSOF.DeviceDesc = "Chromebook SOF Audio (open)"
+CBSOF.SvcDesc    = "Chromebook SOF Audio (open)"
+CBSOF.WaveSpeaker.szPname     = "Speakers"
+CBSOF.TopologySpeaker.szPname = "Speakers"

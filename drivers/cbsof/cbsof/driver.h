@@ -1,14 +1,15 @@
 // cbsof: open SOF audio DSP driver for Gemini Lake Chromebooks.
-// Milestone 2 bring-up: boot the SOF firmware and do one IPC round trip.
+// Internal header for the DSP side (boot, IPC, pipelines). The PortCls side
+// only sees sofapi.h.
 #pragma once
 
 #include <ntddk.h>
-#include <wdf.h>
 #include <hdaudio.h>
 #include <initguid.h>
 
 #include "regs.h"
 #include "sof_ipc3.h"
+#include "sofapi.h"
 
 typedef int BOOL; // the bus interface uses a Win32 BOOL (int)
 
@@ -76,7 +77,8 @@ typedef struct _ADSP_BUS_INTERFACE {
 #define CBSOF_LOG_SIZE 8192
 
 typedef struct _CBSOF_CONTEXT {
-    WDFDEVICE Device;
+    PDEVICE_OBJECT Fdo;
+    PDEVICE_OBJECT Pdo;
     ADSP_BUS_INTERFACE Bus;
     BOOLEAN BusValid;
     BOOLEAN InterruptRegistered;
@@ -111,19 +113,27 @@ typedef struct _CBSOF_CONTEXT {
     struct sof_ipc_fw_ready FwReadyMsg;
     UCHAR ReplyBuf[SOF_IPC_MSG_MAX_SIZE];
 
+    // Serializes host->DSP IPC between streams, power and setup paths
+    KMUTEX IpcMutex;
+
     // Coolstar CsAudio callback API (codec drivers)
     PCALLBACK_OBJECT CsAudioCallbackObj;
     PVOID CsAudioRegistration;
     volatile LONG CodecEndpoints;   // bit per CSAudioEndpointType that registered
 
+    // Pipelines loaded from the topology blob
+    BOOLEAN TopologyLoaded;
+    UINT32 SpeakerHostComp;
+
+    BOOLEAN DspRunning;
+
     // Bring-up log, copied to the registry so it can be read without a debugger
+    KSPIN_LOCK LogLock;
     CHAR Log[CBSOF_LOG_SIZE];
     ULONG LogLen;
-} CBSOF_CONTEXT, *PCBSOF_CONTEXT;
+} CBSOF_CONTEXT;
 
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(CBSOF_CONTEXT, GetCbsofContext)
-
-// driver.cpp
+// sofdevice.cpp
 void CbLog(PCBSOF_CONTEXT ctx, const char* fmt, ...);
 void CbFlushLog(PCBSOF_CONTEXT ctx);
 
@@ -136,9 +146,9 @@ NTSTATUS IpcTx(PCBSOF_CONTEXT ctx, const void* msg, ULONG len, ULONG timeoutMs);
 NTSTATUS IpcTxCheck(PCBSOF_CONTEXT ctx, const void* msg, ULONG len, const char* what);
 ULONG DspReadReg(PCBSOF_CONTEXT ctx, ULONG off);
 
-// tone.cpp
+// sofpcm.cpp
 NTSTATUS CsAudioOpen(PCBSOF_CONTEXT ctx);
 void CsAudioClose(PCBSOF_CONTEXT ctx);
-NTSTATUS DspSpeakerToneTest(PCBSOF_CONTEXT ctx);
+NTSTATUS SofLoadTopology(PCBSOF_CONTEXT ctx);
 BOOL DspInterruptCallback(PVOID context);
 KDEFERRED_ROUTINE DspIpcDpc;

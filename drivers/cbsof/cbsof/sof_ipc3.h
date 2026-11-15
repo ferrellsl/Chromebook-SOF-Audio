@@ -188,6 +188,8 @@ struct sof_ipc_stream {
 #define SOF_IPC_STREAM_PCM_FREE     SOF_CMD_TYPE(0x003)
 #define SOF_IPC_STREAM_TRIG_START   SOF_CMD_TYPE(0x004)
 #define SOF_IPC_STREAM_TRIG_STOP    SOF_CMD_TYPE(0x005)
+#define SOF_IPC_STREAM_TRIG_PAUSE   SOF_CMD_TYPE(0x006)
+#define SOF_IPC_STREAM_TRIG_RELEASE SOF_CMD_TYPE(0x007)
 
 C_ASSERT(sizeof(struct sof_ipc_stream_params) == 84);
 C_ASSERT(sizeof(struct sof_ipc_pcm_params) == 108);

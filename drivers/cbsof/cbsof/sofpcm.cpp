@@ -1,4 +1,4 @@
-// cbsof milestone 3: load the speaker pipeline and play a test tone.
+// cbsof: speaker pipeline loading and SOF PCM streams for the WaveRT endpoints.
 //
 // The pipeline messages come from tools/tplg2ipc.py (spk.cbtp). Stream setup
 // follows Linux sof_ipc3_pcm_hw_params / hda_dsp_pcm_hw_params / sof_pcm_trigger
@@ -194,227 +194,237 @@ static void ApplyProcenFormatQuirk(PCBSOF_CONTEXT ctx, UINT8 tag, BOOLEAN playba
     CbLog(ctx, "stream tag %u -> SD index %u (GCAP 0x%04X), format 0x%04X", tag, idx, gcap, fmt);
 }
 
-// Integer sine table, quarter wave, 256 steps, scaled to 32767.
-static INT16 SineQ(ULONG phase /* 0..1023 */)
-{
-    static const INT16 q[257] = {
-        0,201,402,603,804,1005,1206,1406,1607,1808,2009,2209,2410,2610,2811,3011,3211,3411,3611,3811,4011,4210,4409,
-        4608,4807,5006,5205,5403,5601,5799,5997,6195,6392,6589,6786,6982,7179,7375,7571,7766,7961,8156,8351,8545,8739,
-        8932,9126,9319,9511,9703,9895,10087,10278,10469,10659,10849,11038,11227,11416,11604,11792,11980,12166,12353,
-        12539,12724,12909,13094,13278,13462,13645,13827,14009,14191,14372,14552,14732,14911,15090,15268,15446,15623,
-        15799,15975,16150,16325,16499,16672,16845,17017,17189,17360,17530,17699,17868,18036,18204,18371,18537,18702,
-        18867,19031,19194,19357,19519,19680,19840,20000,20159,20317,20474,20631,20787,20942,21096,21249,21402,21554,
-        21705,21855,22004,22153,22301,22448,22594,22739,22883,23027,23169,23311,23452,23592,23731,23869,24006,24143,
-        24278,24413,24546,24679,24811,24942,25072,25201,25329,25456,25582,25707,25831,25954,26077,26198,26318,26437,
-        26556,26673,26789,26905,27019,27132,27244,27355,27466,27575,27683,27790,27896,28001,28105,28208,28309,28410,
-        28510,28608,28706,28802,28897,28992,29085,29177,29268,29358,29446,29534,29621,29706,29790,29873,29955,30036,
-        30116,30195,30272,30349,30424,30498,30571,30643,30713,30783,30851,30918,30984,31049,31113,31175,31236,31297,
-        31356,31413,31470,31525,31580,31633,31684,31735,31785,31833,31880,31926,31970,32014,32056,32097,32137,32176,
-        32213,32249,32284,32318,32350,32382,32412,32441,32468,32495,32520,32544,32567,32588,32609,32628,32646,32662,
-        32678,32692,32705,32717,32727,32736,32744,32751,32757,32761,32764,32766,32767 };
-    phase &= 1023;
-    if (phase < 256) return q[phase];
-    if (phase < 512) return q[512 - phase];
-    if (phase < 768) return (INT16)-q[phase - 512];
-    return (INT16)-q[1024 - phase];
-}
-
 // ---------------------------------------------------------------------------
-// Speaker tone test
+// Pipelines
 // ---------------------------------------------------------------------------
-#define TONE_PERIOD_BYTES   4096                 // 1024 stereo S16 frames
-#define TONE_PERIODS        4
-#define TONE_BUFFER_BYTES   (TONE_PERIOD_BYTES * TONE_PERIODS)
-#define TONE_FRAMES         (TONE_BUFFER_BYTES / 4)
-#define TONE_CYCLES         40                   // 40 cycles per buffer = 468.75 Hz
-#define TONE_SECONDS        3
-
-NTSTATUS DspSpeakerToneTest(PCBSOF_CONTEXT ctx)
+NTSTATUS SofLoadTopology(PCBSOF_CONTEXT ctx)
 {
-    NTSTATUS status;
-    UINT32 hostComp = MAXULONG;
-    HANDLE stream = NULL;
-    UINT8 tag = 0;
-    PUCHAR buf = NULL, pageTable = NULL;
-    BOOLEAN dmaRunning = FALSE, ipcRunning = FALSE, paramsSet = FALSE, ampOn = FALSE;
-    PHYSICAL_ADDRESS low = {}, high = {}, boundary = {}, phys = {}, ptPhys = {};
-    PVOID bdlVa = NULL;
-    HDAUDIO_STREAM_FORMAT fmt = {};
-    sof_ipc_pcm_params pcm;
-    sof_ipc_stream trig;
-
-    // Let the codec drivers announce themselves.
+    UINT32 speakerHost = MAXULONG;
     ctx->CodecEndpoints = 0;
     CsAudioNotify(ctx, CSAudioEndpointTypeDSP, CSAudioEndpointRegister);
     CbLog(ctx, "codec endpoints registered: mask 0x%X (bit1 = speaker amp)", ctx->CodecEndpoints);
 
-    status = LoadTopology(ctx, &hostComp);
-    if (!NT_SUCCESS(status) || hostComp == MAXULONG) {
-        CbLog(ctx, "speaker topology load failed 0x%08X", status);
+    NTSTATUS status = LoadTopology(ctx, &speakerHost);
+    ctx->TopologyLoaded = NT_SUCCESS(status) && speakerHost != MAXULONG;
+    ctx->SpeakerHostComp = speakerHost;
+    if (!ctx->TopologyLoaded) {
+        CbLog(ctx, "topology load failed 0x%08X", status);
         return NT_SUCCESS(status) ? STATUS_NOT_FOUND : status;
     }
+    return STATUS_SUCCESS;
+}
 
-    // Host DMA stream: 48 kHz, 16-bit, stereo
-    fmt.SampleRate = 48000;
-    fmt.ValidBitsPerSample = 16;
-    fmt.ContainerSize = 16;
-    fmt.NumberOfChannels = 2;
-    status = ctx->Bus.GetRenderStream(ctx->Bus.Context, fmt, &stream, &tag);
+// ---------------------------------------------------------------------------
+// PCM streams (Linux sof_pcm_hw_params / sof_pcm_trigger order)
+// ---------------------------------------------------------------------------
+static NTSTATUS SendStreamCmd(PCBSOF_CONTEXT ctx, PSOF_PCM pcm, ULONG cmd, const char* what)
+{
+    sof_ipc_stream msg;
+    RtlZeroMemory(&msg, sizeof(msg));
+    msg.hdr.size = sizeof(msg);
+    msg.hdr.cmd = SOF_IPC_GLB_STREAM_MSG | cmd;
+    msg.comp_id = pcm->HostComp;
+    return IpcTxCheck(ctx, &msg, sizeof(msg), what);
+}
+
+NTSTATUS SofPcmOpen(PSOF_PCM Pcm, ULONG PcmId, BOOLEAN Capture, PMDL Mdl, ULONG BufferBytes,
+                    ULONG Channels, ULONG Rate, ULONG BitsPerSample)
+{
+    PCBSOF_CONTEXT ctx = g_Cbsof;
+    NTSTATUS status;
+    PHYSICAL_ADDRESS low = {}, high = {}, boundary = {};
+    PVOID bdlVa = NULL;
+    HDAUDIO_STREAM_FORMAT fmt = {};
+    sof_ipc_pcm_params pcm;
+    ULONG pages;
+    PPFN_NUMBER pfns;
+
+    RtlZeroMemory(Pcm, sizeof(*Pcm));
+    Pcm->PcmId = PcmId;
+    Pcm->Capture = Capture;
+
+    if (!ctx || !ctx->DspRunning || !ctx->TopologyLoaded) {
+        return STATUS_DEVICE_NOT_READY;
+    }
+    if (Capture || PcmId != SOF_PCM_SPEAKERS) {
+        return STATUS_NOT_SUPPORTED;     // only the speaker pipeline exists so far
+    }
+    if (!Mdl || BufferBytes == 0 || (BufferBytes & (PAGE_SIZE - 1)) ||
+        BitsPerSample != 16 || Channels != 2 || Rate != 48000) {
+        CbLog(ctx, "SofPcmOpen: unsupported buffer/format (%u bytes, %u ch, %u Hz, %u bits)",
+              BufferBytes, Channels, Rate, BitsPerSample);
+        return STATUS_INVALID_PARAMETER;
+    }
+    pages = BufferBytes / PAGE_SIZE;
+    if (pages > 256) {
+        return STATUS_INVALID_BUFFER_SIZE;    // HDA BDL limit
+    }
+    Pcm->HostComp = ctx->SpeakerHostComp;
+    Pcm->Mdl = Mdl;
+    Pcm->BufferBytes = BufferBytes;
+
+    fmt.SampleRate = Rate;
+    fmt.ValidBitsPerSample = (USHORT)BitsPerSample;
+    fmt.ContainerSize = (USHORT)BitsPerSample;
+    fmt.NumberOfChannels = (USHORT)Channels;
+    status = ctx->Bus.GetRenderStream(ctx->Bus.Context, fmt, &Pcm->Stream, &Pcm->StreamTag);
     if (!NT_SUCCESS(status)) {
         CbLog(ctx, "GetRenderStream failed 0x%08X", status);
+        Pcm->Stream = NULL;
         return status;
     }
 
     high.QuadPart = 0xFFFFFFFF;
-    buf = (PUCHAR)MmAllocateContiguousMemorySpecifyCache(TONE_BUFFER_BYTES, low, high, boundary, MmNonCached);
-    pageTable = (PUCHAR)MmAllocateContiguousMemorySpecifyCache(PAGE_SIZE, low, high, boundary, MmNonCached);
-    if (!buf || !pageTable) {
+    Pcm->PageTable = MmAllocateContiguousMemorySpecifyCache(PAGE_SIZE, low, high, boundary, MmNonCached);
+    if (!Pcm->PageTable) {
         status = STATUS_INSUFFICIENT_RESOURCES;
-        goto out;
+        goto fail;
     }
-    phys = MmGetPhysicalAddress(buf);
-    ptPhys = MmGetPhysicalAddress(pageTable);
+    Pcm->PageTablePhys = MmGetPhysicalAddress(Pcm->PageTable);
 
-    // 468.75 Hz sine, -12 dBFS, same on both channels
-    {
-        INT16* s = (INT16*)buf;
-        for (ULONG f = 0; f < TONE_FRAMES; f++) {
-            INT16 v = (INT16)(SineQ((ULONG)(((ULONGLONG)f * TONE_CYCLES * 1024) / TONE_FRAMES)) / 4);
-            s[2 * f] = v;
-            s[2 * f + 1] = v;
-        }
-    }
-
-    // Compressed 20-bit PFN page table (snd_sof_create_page_table)
-    RtlZeroMemory(pageTable, PAGE_SIZE);
-    for (ULONG i = 0; i < TONE_BUFFER_BYTES / PAGE_SIZE; i++) {
-        ULONG pfn = (ULONG)((phys.QuadPart + (LONGLONG)i * PAGE_SIZE) >> PAGE_SHIFT);
-        PUCHAR p = pageTable + ((5 * i) >> 1);
-        ULONG v;
-        if (i & 1) {
-            v = (p[0] & 0xF) | (pfn << 4);
-        } else {
-            v = pfn;
-        }
-        p[0] = (UCHAR)v; p[1] = (UCHAR)(v >> 8); p[2] = (UCHAR)(v >> 16); p[3] = (UCHAR)(v >> 24);
-    }
-
-    status = ctx->Bus.PrepareDSP(ctx->Bus.Context, stream, TONE_BUFFER_BYTES, TONE_PERIODS, &bdlVa);
+    // BDL: one entry per page of the WaveRT buffer
+    status = ctx->Bus.PrepareDSP(ctx->Bus.Context, Pcm->Stream, BufferBytes, (int)pages, &bdlVa);
     if (!NT_SUCCESS(status) || !bdlVa) {
         CbLog(ctx, "PrepareDSP failed 0x%08X", status);
         if (NT_SUCCESS(status)) status = STATUS_UNSUCCESSFUL;
-        goto out;
+        goto fail;
     }
+    pfns = MmGetMdlPfnArray(Mdl);
     {
         PHDA_BDLE bdl = (PHDA_BDLE)bdlVa;
-        for (ULONG i = 0; i < TONE_PERIODS; i++) {
-            ULONGLONG a = (ULONGLONG)phys.QuadPart + (ULONGLONG)i * TONE_PERIOD_BYTES;
+        PUCHAR pt = (PUCHAR)Pcm->PageTable;
+        RtlZeroMemory(pt, PAGE_SIZE);
+        for (ULONG i = 0; i < pages; i++) {
+            ULONGLONG a = (ULONGLONG)pfns[i] << PAGE_SHIFT;
             bdl[i].AddrLo = (ULONG)a;
             bdl[i].AddrHi = (ULONG)(a >> 32);
-            bdl[i].Size = TONE_PERIOD_BYTES;
-            bdl[i].Ioc = 0;   // positions come from the DPIB buffer, not interrupts
+            bdl[i].Size = PAGE_SIZE;
+            bdl[i].Ioc = 0;
+
+            // compressed 20-bit PFN page table (snd_sof_create_page_table)
+            ULONG pfn = (ULONG)pfns[i];
+            PUCHAR p = pt + ((5 * i) >> 1);
+            ULONG v = (i & 1) ? ((p[0] & 0xF) | (pfn << 4)) : pfn;
+            p[0] = (UCHAR)v; p[1] = (UCHAR)(v >> 8); p[2] = (UCHAR)(v >> 16); p[3] = (UCHAR)(v >> 24);
         }
         KeMemoryBarrier();
     }
-    ApplyProcenFormatQuirk(ctx, tag, TRUE);
+    ApplyProcenFormatQuirk(ctx, Pcm->StreamTag, !Capture);
 
-    // STREAM_PCM_PARAMS
     RtlZeroMemory(&pcm, sizeof(pcm));
     pcm.hdr.size = sizeof(pcm);
     pcm.hdr.cmd = SOF_IPC_GLB_STREAM_MSG | SOF_IPC_STREAM_PCM_PARAMS;
-    pcm.comp_id = hostComp;
+    pcm.comp_id = Pcm->HostComp;
     pcm.params.hdr.size = sizeof(pcm.params);
     pcm.params.buffer.hdr.size = sizeof(pcm.params.buffer);
-    pcm.params.buffer.phy_addr = ptPhys.LowPart;
-    pcm.params.buffer.pages = TONE_BUFFER_BYTES / PAGE_SIZE;
-    pcm.params.buffer.size = TONE_BUFFER_BYTES;
-    pcm.params.direction = 0;
+    pcm.params.buffer.phy_addr = Pcm->PageTablePhys.LowPart;
+    pcm.params.buffer.pages = pages;
+    pcm.params.buffer.size = BufferBytes;
+    pcm.params.direction = Capture ? 1 : 0;
     pcm.params.frame_fmt = 0;            // S16_LE
     pcm.params.buffer_fmt = 0;           // interleaved
-    pcm.params.rate = 48000;
-    pcm.params.stream_tag = tag;
-    pcm.params.channels = 2;
-    pcm.params.sample_valid_bytes = 2;
-    pcm.params.sample_container_bytes = 2;
-    pcm.params.host_period_bytes = TONE_PERIOD_BYTES;
+    pcm.params.rate = Rate;
+    pcm.params.stream_tag = Pcm->StreamTag;
+    pcm.params.channels = (UINT16)Channels;
+    pcm.params.sample_valid_bytes = (UINT16)(BitsPerSample / 8);
+    pcm.params.sample_container_bytes = (UINT16)(BitsPerSample / 8);
+    pcm.params.host_period_bytes = min(BufferBytes / 2, (ULONG)(Rate / 100 * Channels * (BitsPerSample / 8)));
     pcm.params.no_stream_position = 1;   // HDA: positions from DPIB
     status = IpcTxCheck(ctx, &pcm, sizeof(pcm), "PCM_PARAMS");
     if (!NT_SUCCESS(status)) {
-        goto out;
+        goto fail;
     }
-    paramsSet = TRUE;
-    {
-        const sof_ipc_pcm_params_reply* r = (const sof_ipc_pcm_params_reply*)ctx->ReplyBuf;
-        CbLog(ctx, "PCM_PARAMS ok: comp %u posn_offset 0x%X", r->comp_id, r->posn_offset);
-    }
+    Pcm->ParamsSet = TRUE;
+    CbLog(ctx, "PCM %u open: %u bytes (%u pages), tag %u", PcmId, BufferBytes, pages, Pcm->StreamTag);
+    return STATUS_SUCCESS;
 
-    // Amp on, then host DMA, then the firmware stream (sof_pcm_trigger order)
-    CsAudioNotify(ctx, CSAudioEndpointTypeSpeaker, CSAudioEndpointStart);
-    ampOn = TRUE;
+fail:
+    SofPcmClose(Pcm);
+    return status;
+}
 
-    ctx->Bus.TriggerDSP(ctx->Bus.Context, stream, TRUE);
-    dmaRunning = TRUE;
-
-    RtlZeroMemory(&trig, sizeof(trig));
-    trig.hdr.size = sizeof(trig);
-    trig.hdr.cmd = SOF_IPC_GLB_STREAM_MSG | SOF_IPC_STREAM_TRIG_START;
-    trig.comp_id = hostComp;
-    status = IpcTxCheck(ctx, &trig, sizeof(trig), "TRIG_START");
-    if (!NT_SUCCESS(status)) {
-        goto out;
+NTSTATUS SofPcmRun(PSOF_PCM Pcm)
+{
+    PCBSOF_CONTEXT ctx = g_Cbsof;
+    if (!ctx || !Pcm->ParamsSet) {
+        return STATUS_DEVICE_NOT_READY;
     }
-    ipcRunning = TRUE;
-    CbLog(ctx, "tone playing for %u s", TONE_SECONDS);
-
-    {
-        ULONG lastPos = 0, moves = 0;
-        for (ULONG i = 0; i < TONE_SECONDS * 4; i++) {
-            LARGE_INTEGER t;
-            t.QuadPart = -2500000LL;   // 250 ms
-            KeDelayExecutionThread(KernelMode, FALSE, &t);
-            ULONG pos = ctx->Bus.StreamPosition(ctx->Bus.Context, stream);
-            if (pos != lastPos) moves++;
-            if (i % 4 == 3) {
-                CbLog(ctx, "  t=%u ms DMA position %u", (i + 1) * 250, pos);
-            }
-            lastPos = pos;
-        }
-        CbLog(ctx, "DMA position changed in %u of %u samples", moves, TONE_SECONDS * 4);
-        if (ctx->PanicCode) {
-            CbLog(ctx, "firmware PANIC 0x%08X during playback", ctx->PanicCode);
-        }
+    if (Pcm->DmaRunning) {
+        return STATUS_SUCCESS;
     }
-
-out:
-    if (ipcRunning) {
-        RtlZeroMemory(&trig, sizeof(trig));
-        trig.hdr.size = sizeof(trig);
-        trig.hdr.cmd = SOF_IPC_GLB_STREAM_MSG | SOF_IPC_STREAM_TRIG_STOP;
-        trig.comp_id = hostComp;
-        IpcTxCheck(ctx, &trig, sizeof(trig), "TRIG_STOP");
+    if (!Pcm->AmpOn) {
+        CsAudioNotify(ctx, CSAudioEndpointTypeSpeaker, CSAudioEndpointStart);
+        Pcm->AmpOn = TRUE;
     }
-    if (dmaRunning) {
-        ctx->Bus.TriggerDSP(ctx->Bus.Context, stream, FALSE);
-    }
-    if (ampOn) {
-        CsAudioNotify(ctx, CSAudioEndpointTypeSpeaker, CSAudioEndpointStop);
-    }
-    if (paramsSet) {
-        RtlZeroMemory(&trig, sizeof(trig));
-        trig.hdr.size = sizeof(trig);
-        trig.hdr.cmd = SOF_IPC_GLB_STREAM_MSG | SOF_IPC_STREAM_PCM_FREE;
-        trig.comp_id = hostComp;
-        IpcTxCheck(ctx, &trig, sizeof(trig), "PCM_FREE");
-    }
-    if (stream) {
-        ctx->Bus.CleanupDSP(ctx->Bus.Context, stream);
-        ctx->Bus.FreeStream(ctx->Bus.Context, stream);
-    }
-    if (buf) {
-        MmFreeContiguousMemorySpecifyCache(buf, TONE_BUFFER_BYTES, MmNonCached);
-    }
-    if (pageTable) {
-        MmFreeContiguousMemorySpecifyCache(pageTable, PAGE_SIZE, MmNonCached);
+    // Start/release: host DMA first, then the firmware
+    ctx->Bus.TriggerDSP(ctx->Bus.Context, Pcm->Stream, TRUE);
+    Pcm->DmaRunning = TRUE;
+    NTSTATUS status = Pcm->Started
+        ? SendStreamCmd(ctx, Pcm, SOF_IPC_STREAM_TRIG_RELEASE, "TRIG_RELEASE")
+        : SendStreamCmd(ctx, Pcm, SOF_IPC_STREAM_TRIG_START, "TRIG_START");
+    if (NT_SUCCESS(status)) {
+        Pcm->Started = TRUE;
+        Pcm->Paused = FALSE;
     }
     return status;
+}
+
+NTSTATUS SofPcmPause(PSOF_PCM Pcm)
+{
+    PCBSOF_CONTEXT ctx = g_Cbsof;
+    if (!ctx || !Pcm->DmaRunning) {
+        return STATUS_SUCCESS;
+    }
+    // Pause: firmware first, then host DMA
+    NTSTATUS status = SendStreamCmd(ctx, Pcm, SOF_IPC_STREAM_TRIG_PAUSE, "TRIG_PAUSE");
+    ctx->Bus.TriggerDSP(ctx->Bus.Context, Pcm->Stream, FALSE);
+    Pcm->DmaRunning = FALSE;
+    Pcm->Paused = TRUE;
+    if (Pcm->AmpOn) {
+        CsAudioNotify(ctx, CSAudioEndpointTypeSpeaker, CSAudioEndpointStop);
+        Pcm->AmpOn = FALSE;
+    }
+    return status;
+}
+
+void SofPcmClose(PSOF_PCM Pcm)
+{
+    PCBSOF_CONTEXT ctx = g_Cbsof;
+    if (!ctx) {
+        return;
+    }
+    if (Pcm->Started && ctx->DspRunning) {
+        SendStreamCmd(ctx, Pcm, SOF_IPC_STREAM_TRIG_STOP, "TRIG_STOP");
+    }
+    if (Pcm->DmaRunning) {
+        ctx->Bus.TriggerDSP(ctx->Bus.Context, Pcm->Stream, FALSE);
+        Pcm->DmaRunning = FALSE;
+    }
+    if (Pcm->AmpOn) {
+        CsAudioNotify(ctx, CSAudioEndpointTypeSpeaker, CSAudioEndpointStop);
+        Pcm->AmpOn = FALSE;
+    }
+    if (Pcm->ParamsSet && ctx->DspRunning) {
+        SendStreamCmd(ctx, Pcm, SOF_IPC_STREAM_PCM_FREE, "PCM_FREE");
+    }
+    Pcm->ParamsSet = FALSE;
+    Pcm->Started = FALSE;
+    if (Pcm->Stream) {
+        ctx->Bus.CleanupDSP(ctx->Bus.Context, Pcm->Stream);
+        ctx->Bus.FreeStream(ctx->Bus.Context, Pcm->Stream);
+        Pcm->Stream = NULL;
+    }
+    if (Pcm->PageTable) {
+        MmFreeContiguousMemorySpecifyCache(Pcm->PageTable, PAGE_SIZE, MmNonCached);
+        Pcm->PageTable = NULL;
+    }
+}
+
+ULONG SofPcmPosition(PSOF_PCM Pcm)
+{
+    PCBSOF_CONTEXT ctx = g_Cbsof;
+    if (!ctx || !Pcm->Stream || !Pcm->BufferBytes) {
+        return 0;
+    }
+    return ctx->Bus.StreamPosition(ctx->Bus.Context, Pcm->Stream) % Pcm->BufferBytes;
 }
