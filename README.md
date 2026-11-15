@@ -7,6 +7,10 @@ per-device activation: the whole stack is open source.
 **Works:** speakers, headphones, the headset microphone and the built-in
 microphones, with automatic switching when a headset is plugged in or out.
 
+HDMI / DisplayPort audio is not part of this package: it goes through the
+Intel Display Audio driver that Windows installs on its own, and keeps working
+alongside these drivers.
+
 ## Supported hardware
 
 Google **Octopus** boards with the DA7219 headset codec and MAX98357A speaker
