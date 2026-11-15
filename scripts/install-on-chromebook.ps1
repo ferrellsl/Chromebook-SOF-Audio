@@ -129,11 +129,16 @@ if ($Restore) {
     "$(Get-Date) restore" | Out-File $progress
     Step "disabling the DSP device"
     pnputil /disable-device "$($dsp.InstanceId)" | Out-Null
-    & $devcon update (Join-Path $cool.FullName "csaudiointcsof.inf") $hwid | Out-Null
-    Step "Coolstar driver selected"
     Remove-CbsofPackages
     Step "enabling the DSP device"
     pnputil /enable-device "$($dsp.InstanceId)" | Out-Null
+    Start-Sleep -Seconds 3
+    # Coolstar's is now the only driver for it; make sure it is the one in use.
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $r = & $devcon update (Join-Path $cool.FullName "csaudiointcsof.inf") $hwid 2>&1 | Out-String
+    $ErrorActionPreference = $old
+    Step "devcon (exit $LASTEXITCODE): $($r.Trim())"
     Step "Restored Coolstar's SOF driver. Restart if there is no sound."
     return
 }
@@ -159,22 +164,28 @@ Clear-Guard
 Step "disabling the DSP device ($($dsp.FriendlyName))"
 pnputil /disable-device "$($dsp.InstanceId)" | Out-Null
 
-# 2. Remove every older cbsof package
+# 2. Remove every older cbsof package, so nothing old is left to fall back to
 Remove-CbsofPackages
 
-# 3. Put the new package on the (still disabled) device. Forced, because
-#    Coolstar's signed driver would otherwise outrank a test-signed one.
+# 3. Re-enable: the only driver left is Coolstar's, so that is what starts
+Step "enabling the DSP device (Coolstar's driver for now)"
+pnputil /enable-device "$($dsp.InstanceId)" | Out-Null
+Start-Sleep -Seconds 3
+
+# 4. Swap it to cbsof. Forced with devcon, because Coolstar's signed driver
+#    would otherwise outrank a test-signed one. (devcon cannot update a
+#    disabled device, which is why step 3 comes first.)
 Step "installing $(Join-Path $here 'cbsof\cbsof.inf')"
+$old = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 $r = & $devcon update (Join-Path $here "cbsof\cbsof.inf") $hwid 2>&1 | Out-String
-Step "devcon: $($r.Trim())"
-if ($LASTEXITCODE -gt 1) {
-    Step "devcon update failed ($LASTEXITCODE); the DSP device stays disabled"
+$rc = $LASTEXITCODE
+$ErrorActionPreference = $old
+Step "devcon (exit $rc): $($r.Trim())"
+if ($rc -gt 1) {
+    Step "devcon update failed; the DSP device stays on Coolstar's driver"
     return
 }
-
-# 4. Start it
-Step "enabling the DSP device"
-pnputil /enable-device "$($dsp.InstanceId)" | Out-Null
 Start-Sleep -Seconds 5
 Step "done"
 Show-Log
