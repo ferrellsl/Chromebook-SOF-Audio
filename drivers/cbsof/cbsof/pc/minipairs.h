@@ -121,12 +121,12 @@ static
 ENDPOINT_MINIPAIR DmicMiniports =
 {
     eMicArrayDevice1,
-    L"TopologyMic",                         // must match KSNAME_TopologyMic in the INF
+    L"TopologyDmic",                        // must match KSNAME_TopologyDmic in the INF (renamed in 0.6.2: fresh endpoint)
     NULL,
     CreateMiniportTopologySimpleAudioSample,
     &DmicTopoMiniportFilterDescriptor,
     0, NULL,
-    L"WaveMic",                             // must match KSNAME_WaveMic in the INF
+    L"WaveDmic",                            // must match KSNAME_WaveDmic in the INF
     NULL,
     CreateMiniportWaveRTSimpleAudioSample,
     &DmicWaveMiniportFilterDescriptor,
