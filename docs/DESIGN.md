@@ -77,7 +77,10 @@ The closed binary is never disassembled, patched or copied. Allowed sources:
    attempt, SOF 2.2.0 / ABI 3.22.1, IRQ-driven FW_READY, PM_CTX_SIZE round
    trip with error 0. Mailbox windows come from the .ri extended manifest
    (host->dsp 0xA0000, dsp->host 0x81000, stream 0xC1000).
-3. Topology loaded, speakers play a tone.
+3. Topology loaded, speakers play a tone. **Done 2026-11-14 on Bobba (touch),
+   build 0.3**: tools/tplg2ipc.py emits pipeline 1 (13 IPC3 messages, spk.cbtp),
+   the driver replays them, sets up HDA host DMA + PCM_PARAMS, powers the
+   MAX98357A via the CsAudio callback API, and a 469 Hz tone was heard.
 4. PortCls WaveRT endpoints: Speakers, Headphones, Mic Array, Mic, with jack switching.
 5. D3 / sleep / resume, polish, installer.
 

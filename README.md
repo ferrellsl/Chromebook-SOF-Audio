@@ -18,9 +18,9 @@ with a Celeron N4020, DA7219 headset codec and MAX98357A speaker amp.
 
 ## Status
 
-Milestone 2 (bring-up) **works on hardware** (Bobba, 2026-11-14): `cbsof.sys`
-boots the SOF 2.2.0 firmware on the DSP and completes an IPC round trip. It has
-no audio endpoints yet. It writes its log to the
+Milestone 3 **works on hardware** (Bobba, 2026-11-14): `cbsof.sys` boots the
+SOF 2.2.0 firmware, loads the speaker pipeline and plays a test tone through
+the MAX98357A speakers. It has no Windows audio endpoints yet (milestone 4). It writes its log to the
 registry:
 
 ```powershell
