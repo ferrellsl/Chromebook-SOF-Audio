@@ -50,7 +50,7 @@ PCEVENT_ITEM HeadphoneJackPinEvents[] =
     }
 };
 
-DEFINE_PCAUTOMATION_TABLE_EVENT(AutomationHeadphoneJackPin, HeadphoneJackPinEvents);
+// (on the filter automation table below, as in SysVAD; a pin table is never subscribed)
 
 //=============================================================================
 static
@@ -81,7 +81,7 @@ PCPIN_DESCRIPTOR HeadphoneTopoMiniportPins[] =
     0,
     0,
     0,                                                  // InstanceCount
-    &AutomationHeadphoneJackPin,                        // AutomationTable: jack-change event
+    NULL,                                                     // AutomationTable: jack-change event
     {                                                   // KsPinDescriptor
       0,                                                // InterfacesCount
       NULL,                                             // Interfaces
@@ -199,7 +199,7 @@ PCPROPERTY_ITEM PropertiesHeadphoneTopoFilter[] =
     }
 };
 
-DEFINE_PCAUTOMATION_TABLE_PROP(AutomationHeadphoneTopoFilter, PropertiesHeadphoneTopoFilter);
+DEFINE_PCAUTOMATION_TABLE_PROP_EVENT(AutomationHeadphoneTopoFilter, PropertiesHeadphoneTopoFilter, HeadphoneJackPinEvents);
 
 //=============================================================================
 static
