@@ -47,7 +47,12 @@ typedef VOID (*SOF_JACK_CALLBACK)(PVOID Context, BOOLEAN Connected);
 NTSTATUS SofJackStart(PDRIVER_OBJECT DriverObject);
 void SofJackStop(void);
 BOOLEAN SofHeadphoneConnected(void);
-void SofSetHeadphoneJackCallback(SOF_JACK_CALLBACK Callback, PVOID Context);
+BOOLEAN SofSpeakerConnected(void);      // FALSE while headphones are plugged in
+// Slot 0 = headphone topology filter, slot 1 = speaker topology filter (the
+// speakers are reported unplugged while headphones are in, so Windows switches).
+#define SOF_JACK_SLOT_HEADPHONE 0
+#define SOF_JACK_SLOT_SPEAKER   1
+void SofSetJackCallback(ULONG Slot, SOF_JACK_CALLBACK Callback, PVOID Context);
 
 // sofpcm.cpp: called from the WaveRT stream (PASSIVE_LEVEL except Position)
 NTSTATUS SofPcmOpen(PSOF_PCM Pcm, ULONG PcmId, BOOLEAN Capture, PMDL Mdl, ULONG BufferBytes,

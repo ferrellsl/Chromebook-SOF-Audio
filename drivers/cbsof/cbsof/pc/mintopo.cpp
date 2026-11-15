@@ -18,6 +18,7 @@ Abstract:
 #include "minwavert.h"
 #include "mintopo.h"
 #include "headphonetopo.h"
+#include "speakertopo.h"
 #include "..\sofapi.h"
 
 //=============================================================================
@@ -110,7 +111,9 @@ Return Value:
 
     // cbsof: stop jack callbacks into this object
     if (m_DeviceType == eHeadphoneDevice) {
-        SofSetHeadphoneJackCallback(NULL, NULL);
+        SofSetJackCallback(SOF_JACK_SLOT_HEADPHONE, NULL, NULL);
+    } else if (m_DeviceType == eSpeakerDevice) {
+        SofSetJackCallback(SOF_JACK_SLOT_SPEAKER, NULL, NULL);
     }
 } // ~CMiniportTopology
 
@@ -263,9 +266,11 @@ Return Value:
         DPF(D_ERROR, ("Init: CMiniportTopologySimpleAudioSample::Init failed, 0x%x", ntStatus)),
         Done);
 
-    // cbsof: the headphone filter raises jack-change events from sofjack.cpp
+    // cbsof: both output filters raise jack-change events from sofjack.cpp
     if (m_DeviceType == eHeadphoneDevice) {
-        SofSetHeadphoneJackCallback(HeadphoneJackChanged, this);
+        SofSetJackCallback(SOF_JACK_SLOT_HEADPHONE, HeadphoneJackChanged, this);
+    } else if (m_DeviceType == eSpeakerDevice) {
+        SofSetJackCallback(SOF_JACK_SLOT_SPEAKER, SpeakerJackChanged, this);
     }
 
 Done:

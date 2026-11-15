@@ -34,8 +34,8 @@ NTSYSAPI NTSTATUS NTAPI ZwWaitForSingleObject(HANDLE Handle, BOOLEAN Alertable, 
 static PVOID g_NotifyHandle = NULL;
 static KGUARDED_MUTEX g_JackLock;            // callback, thread handle, file handle
 static BOOLEAN g_LockInit = FALSE;
-static SOF_JACK_CALLBACK g_Callback = NULL;
-static PVOID g_CallbackContext = NULL;
+static SOF_JACK_CALLBACK g_Callback[2] = {};
+static PVOID g_CallbackContext[2] = {};
 // Until the DA7219 tells us otherwise, report "connected", so headphones
 // still work (as in 0.5.0) if the jack device is never found.
 static volatile LONG g_Connected = 1;
@@ -57,20 +57,30 @@ static void JackLog(const char* fmt, ...)
     CbSetStatus(g_Cbsof, L"CbsofJack", line);   // latest jack status, never scrolls out
 }
 
+// Until the DA7219 has reported (or if it never does) both outputs count as
+// connected, so neither becomes unusable.
 BOOLEAN SofHeadphoneConnected(void)
 {
-    return g_Connected != 0;
+    return !g_KnownState || g_Connected != 0;
 }
 
-void SofSetHeadphoneJackCallback(SOF_JACK_CALLBACK Callback, PVOID Context)
+BOOLEAN SofSpeakerConnected(void)
 {
+    return !g_KnownState || g_Connected == 0;
+}
+
+void SofSetJackCallback(ULONG Slot, SOF_JACK_CALLBACK Callback, PVOID Context)
+{
+    if (Slot > 1) {
+        return;
+    }
     if (!g_LockInit) {
         KeInitializeGuardedMutex(&g_JackLock);
         g_LockInit = TRUE;
     }
     KeAcquireGuardedMutex(&g_JackLock);
-    g_Callback = Callback;
-    g_CallbackContext = Context;
+    g_Callback[Slot] = Callback;
+    g_CallbackContext[Slot] = Context;
     KeReleaseGuardedMutex(&g_JackLock);
 }
 
@@ -83,8 +93,10 @@ static void SetJackState(BOOLEAN connected)
     }
     JackLog("headphones %s", connected ? "plugged in" : "unplugged");
     KeAcquireGuardedMutex(&g_JackLock);
-    if (g_Callback) {
-        g_Callback(g_CallbackContext, connected);
+    for (int i = 0; i < 2; i++) {
+        if (g_Callback[i]) {
+            g_Callback[i](g_CallbackContext[i], connected);
+        }
     }
     KeReleaseGuardedMutex(&g_JackLock);
 }

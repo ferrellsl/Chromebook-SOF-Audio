@@ -18,6 +18,7 @@ Abstract:
 #include "mintopo.h"
 #include "speakertopo.h"
 #include "speakertoptable.h"
+#include "..\sofapi.h"
 
 
 #pragma code_seg("PAGE")
@@ -57,6 +58,10 @@ Return Value:
 
     if (IsEqualGUIDAligned(*PropertyRequest->PropertyItem->Set, KSPROPSETID_Jack))
     {
+        // cbsof: speakers count as unplugged while headphones are in, so
+        // Windows moves playback to the headphones and back (sofjack.cpp)
+        SpeakerJackDescBridge.IsConnected = SofSpeakerConnected();
+
         if (PropertyRequest->PropertyItem->Id == KSPROPERTY_JACK_DESCRIPTION)
         {
             ntStatus = pMiniport->PropertyHandlerJackDescription(
@@ -71,13 +76,49 @@ Return Value:
                 PropertyRequest,
                 ARRAYSIZE(SpeakerJackDescriptions),
                 SpeakerJackDescriptions,
-                0 // jack capabilities
+                JACKDESC2_PRESENCE_DETECT_CAPABILITY
                 );
         }
     }
 
     return ntStatus;
 } // PropertyHandler_SpeakerTopoFilter
+
+//=============================================================================
+// cbsof: jack-change event on the speaker pin (see headphonetopo.cpp)
+NTSTATUS
+EventHandler_SpeakerJack
+(
+    _In_ PPCEVENT_REQUEST EventRequest
+)
+{
+    PAGED_CODE();
+    PCMiniportTopology pMiniport = (PCMiniportTopology)EventRequest->MajorTarget;
+    if (EventRequest->Verb == PCEVENT_VERB_ADD) {
+        pMiniport->AddEventToEventList(EventRequest->EventEntry);
+    }
+    return STATUS_SUCCESS;
+}
+
+#pragma code_seg()
+VOID
+SpeakerJackChanged
+(
+    _In_ PVOID   Context,
+    _In_ BOOLEAN Connected
+)
+{
+    UNREFERENCED_PARAMETER(Connected);
+    PCMiniportTopology pMiniport = (PCMiniportTopology)Context;
+    pMiniport->GenerateEventList(
+        (GUID*)&KSEVENTSETID_PinCapsChange,
+        KSEVENT_PINCAPS_JACKINFOCHANGE,
+        TRUE,
+        KSPIN_TOPO_LINEOUT_DEST,
+        FALSE,
+        ULONG(-1));
+}
+#pragma code_seg("PAGE")
 
 //=============================================================================
 NTSTATUS

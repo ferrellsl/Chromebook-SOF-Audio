@@ -37,6 +37,21 @@ PKSDATARANGE SpeakerTopoPinDataRangePointersBridge[] =
 };
 
 //=============================================================================
+// cbsof: jack-change event on the speaker pin (raised with the headphone jack)
+static
+PCEVENT_ITEM SpeakerJackPinEvents[] =
+{
+    {
+        &KSEVENTSETID_PinCapsChange,
+        KSEVENT_PINCAPS_JACKINFOCHANGE,
+        KSEVENT_TYPE_ENABLE | KSEVENT_TYPE_BASICSUPPORT,
+        EventHandler_SpeakerJack
+    }
+};
+
+DEFINE_PCAUTOMATION_TABLE_EVENT(AutomationSpeakerJackPin, SpeakerJackPinEvents);
+
+//=============================================================================
 static
 PCPIN_DESCRIPTOR SpeakerTopoMiniportPins[] =
 {
@@ -65,7 +80,7 @@ PCPIN_DESCRIPTOR SpeakerTopoMiniportPins[] =
     0,
     0,
     0,                                                  // InstanceCount
-    NULL,                                               // AutomationTable
+    &AutomationSpeakerJackPin,                          // AutomationTable: jack-change event
     {                                                   // KsPinDescriptor
       0,                                                // InterfacesCount
       NULL,                                             // Interfaces
