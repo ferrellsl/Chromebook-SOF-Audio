@@ -68,7 +68,9 @@ foreach ($n in "sklhdaudbus", "da7219", "max98357a") {
 }
 Collect "cbsof" (FindSys "cbsof").FullName (FindInf "cbsof") @(
     (Join-Path $root "drivers\cbsof\firmware\sof-glk.ri"),
-    (Join-Path $root "drivers\cbsof\firmware\spk.cbtp"))
+    (Join-Path $root "drivers\cbsof\firmware\spk.cbtp"),
+    (Join-Path $root "drivers\cbsof\firmware\mic.cbtp"),
+    (Join-Path $root "drivers\cbsof\firmware\dmic.cbtp"))
 
 Copy-Item (Join-Path $root "scripts\install-on-chromebook.ps1") $out
 Copy-Item "C:\Program Files (x86)\Windows Kits\10\Tools\10.0.26100.0\x64\devcon.exe" $out

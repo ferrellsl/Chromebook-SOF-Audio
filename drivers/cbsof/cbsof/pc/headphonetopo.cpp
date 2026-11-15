@@ -61,9 +61,6 @@ Return Value:
         // cbsof: the live jack state from the DA7219 (sofjack.cpp)
         HeadphoneJackDescBridge.IsConnected = SofHeadphoneConnected();
 
-        SofTrace("headphone jack read: description%s, connected %u",
-                 PropertyRequest->PropertyItem->Id == KSPROPERTY_JACK_DESCRIPTION2 ? "2" : "",
-                 (ULONG)HeadphoneJackDescBridge.IsConnected);
         if (PropertyRequest->PropertyItem->Id == KSPROPERTY_JACK_DESCRIPTION)
         {
             ntStatus = pMiniport->PropertyHandlerJackDescription(

@@ -21,9 +21,9 @@ Abstract:
 #include "headphonetopo.h"
 #include "headphonetoptable.h"
 
-#include "micarraytopo.h"
-#include "micarray1toptable.h"
-#include "micarraywavtable.h"
+#include "captopo.h"
+#include "captoptable.h"
+#include "capwavtable.h"
 
 
 NTSTATUS
@@ -102,17 +102,13 @@ ENDPOINT_MINIPAIR SpeakerMiniports =
 //
 
 /*********************************************************************
-* Topology/Wave bridge connection for mic array  1 (front)           *
-*                                                                    *
-*              +------+    +------+                                  *
-*              | Topo |    | Wave |                                  *
-*              |      |    |      |                                  *
-*  Mic in  --->|0    1|===>|0    1|---> Capture Host Pin             *
-*              |      |    |      |                                  *
-*              +------+    +------+                                  *
+* cbsof: capture endpoints. Topo (mic elements -> bridge) feeds Wave  *
+* (bridge -> host pin):                                               *
+*   Microphone          built-in DMIC, SOF PCM 99, 4 ch              *
+*   Headset Microphone  DA7219 on SSP2, SOF PCM 1 capture, 2 ch      *
 *********************************************************************/
 static
-PHYSICALCONNECTIONTABLE MicArray1TopologyPhysicalConnections[] =
+PHYSICALCONNECTIONTABLE CaptureTopologyPhysicalConnections[] =
 {
     {
         KSPIN_TOPO_BRIDGE,          // TopologyOut
@@ -122,34 +118,51 @@ PHYSICALCONNECTIONTABLE MicArray1TopologyPhysicalConnections[] =
 };
 
 static
-ENDPOINT_MINIPAIR MicArray1Miniports =
+ENDPOINT_MINIPAIR DmicMiniports =
 {
     eMicArrayDevice1,
-    L"TopologyMicArray1",                   // make sure this or the template name matches with KSNAME_TopologyMicArray1 in the inf's [Strings] section 
-    NULL,                                   // optional template name
-    CreateMicArrayMiniportTopology,
-    &MicArray1TopoMiniportFilterDescriptor,
-    0, NULL,                                // Interface properties
-    L"WaveMicArray1",                       // make sure this or the tempalte name matches with KSNAME_WaveMicArray1 in the inf's [Strings] section
-    NULL,                                   // optional template name
-    CreateMiniportWaveRTSimpleAudioSample,
-    &MicArrayWaveMiniportFilterDescriptor,
-    0,                                      // Interface properties
+    L"TopologyMic",                         // must match KSNAME_TopologyMic in the INF
     NULL,
-    MICARRAY_DEVICE_MAX_CHANNELS,
-    MicArrayPinDeviceFormatsAndModes,
-    SIZEOF_ARRAY(MicArrayPinDeviceFormatsAndModes),
-    MicArray1TopologyPhysicalConnections,
-    SIZEOF_ARRAY(MicArray1TopologyPhysicalConnections),
+    CreateMiniportTopologySimpleAudioSample,
+    &DmicTopoMiniportFilterDescriptor,
+    0, NULL,
+    L"WaveMic",                             // must match KSNAME_WaveMic in the INF
+    NULL,
+    CreateMiniportWaveRTSimpleAudioSample,
+    &DmicWaveMiniportFilterDescriptor,
+    0,
+    NULL,
+    DMIC_CHANNELS,
+    DmicPinDeviceFormatsAndModes,
+    SIZEOF_ARRAY(DmicPinDeviceFormatsAndModes),
+    CaptureTopologyPhysicalConnections,
+    SIZEOF_ARRAY(CaptureTopologyPhysicalConnections),
     ENDPOINT_NO_FLAGS,
 };
 
+static
+ENDPOINT_MINIPAIR MicInMiniports =
+{
+    eMicInDevice,
+    L"TopologyMicIn",                       // must match KSNAME_TopologyMicIn in the INF
+    NULL,
+    CreateMiniportTopologySimpleAudioSample,
+    &MicInTopoMiniportFilterDescriptor,
+    0, NULL,
+    L"WaveMicIn",                           // must match KSNAME_WaveMicIn in the INF
+    NULL,
+    CreateMiniportWaveRTSimpleAudioSample,
+    &MicInWaveMiniportFilterDescriptor,
+    0,
+    NULL,
+    MICIN_CHANNELS,
+    MicInPinDeviceFormatsAndModes,
+    SIZEOF_ARRAY(MicInPinDeviceFormatsAndModes),
+    CaptureTopologyPhysicalConnections,
+    SIZEOF_ARRAY(CaptureTopologyPhysicalConnections),
+    ENDPOINT_NO_FLAGS,
+};
 
-//=============================================================================
-//
-// Render miniport pairs. NOTE: the split of render and capture is arbitrary and
-// unnessary, this array could contain capture endpoints.
-//
 /*********************************************************************
 * cbsof: Headphones (DA7219 on SSP2, SOF PCM 1). Same wave filter as  *
 * the speaker (48 kHz / 16-bit / stereo); its own topology filter     *
@@ -205,7 +218,8 @@ PENDPOINT_MINIPAIR  g_RenderEndpoints[] =
 static
 PENDPOINT_MINIPAIR  g_CaptureEndpoints[] =
 {
-    &MicArray1Miniports,
+    &DmicMiniports,
+    &MicInMiniports,
 };
 
 #define g_cCaptureEndpoints (SIZEOF_ARRAY(g_CaptureEndpoints))

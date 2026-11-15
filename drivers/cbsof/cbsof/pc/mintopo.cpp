@@ -19,6 +19,7 @@ Abstract:
 #include "mintopo.h"
 #include "headphonetopo.h"
 #include "speakertopo.h"
+#include "captopo.h"
 #include "..\sofapi.h"
 
 //=============================================================================
@@ -114,6 +115,10 @@ Return Value:
         SofSetJackCallback(SOF_JACK_SLOT_HEADPHONE, NULL, NULL);
     } else if (m_DeviceType == eSpeakerDevice) {
         SofSetJackCallback(SOF_JACK_SLOT_SPEAKER, NULL, NULL);
+    } else if (m_DeviceType == eMicInDevice) {
+        SofSetJackCallback(SOF_JACK_SLOT_HEADSETMIC, NULL, NULL);
+    } else if (m_DeviceType == eMicArrayDevice1) {
+        SofSetJackCallback(SOF_JACK_SLOT_DMIC, NULL, NULL);
     }
 } // ~CMiniportTopology
 
@@ -271,6 +276,10 @@ Return Value:
         SofSetJackCallback(SOF_JACK_SLOT_HEADPHONE, HeadphoneJackChanged, this);
     } else if (m_DeviceType == eSpeakerDevice) {
         SofSetJackCallback(SOF_JACK_SLOT_SPEAKER, SpeakerJackChanged, this);
+    } else if (m_DeviceType == eMicInDevice) {
+        SofSetJackCallback(SOF_JACK_SLOT_HEADSETMIC, MicInJackChanged, this);
+    } else if (m_DeviceType == eMicArrayDevice1) {
+        SofSetJackCallback(SOF_JACK_SLOT_DMIC, DmicJackChanged, this);
     }
 
 Done:

@@ -30,6 +30,10 @@ typedef struct _SOF_PCM {
     BOOLEAN Started;        // TRIG_START sent at least once since PCM_PARAMS
     BOOLEAN Paused;
     BOOLEAN AmpOn;
+    // capture level meter (diagnostic, logged when the stream closes)
+    PSHORT BufVa;
+    ULONG ScanPos;
+    ULONG Peak[4];
 } SOF_PCM, *PSOF_PCM;
 
 // The single DSP instance (one audio controller per machine)
@@ -52,6 +56,12 @@ BOOLEAN SofSpeakerConnected(void);      // FALSE while headphones are plugged in
 // speakers are reported unplugged while headphones are in, so Windows switches).
 #define SOF_JACK_SLOT_HEADPHONE 0
 #define SOF_JACK_SLOT_SPEAKER   1
+// Slot 2 = headset mic, slot 3 = built-in mics (unplugged while a headset mic is in)
+#define SOF_JACK_SLOT_HEADSETMIC 2
+#define SOF_JACK_SLOT_DMIC       3
+#define SOF_JACK_SLOTS           4
+BOOLEAN SofHeadsetMicConnected(void);
+BOOLEAN SofDmicConnected(void);
 void SofSetJackCallback(ULONG Slot, SOF_JACK_CALLBACK Callback, PVOID Context);
 // Plain log line (for the PortCls side; does not touch CbsofJack)
 void SofTrace(const char* fmt, ...);

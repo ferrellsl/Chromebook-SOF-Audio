@@ -18,7 +18,6 @@ Abstract:
 #include "endpoints.h"
 #include "minwavert.h"
 #include "minwavertstream.h"
-#include "micarraywavtable.h"
 
 #define EFFECTS_LIST_COUNT 2
 
@@ -223,7 +222,7 @@ Arguments:
 
     //If called for the mic array pin, set ResultantFormat to be the endpoint's only supported format.
     //Otherwise, allow the class handler to set ResultantFormat.  
-    if ((this->m_DeviceType) == eMicArrayDevice1)
+    if (!IsRenderDevice())      // cbsof: both capture endpoints have exactly one format
     {
         requiredSize = sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE);
 
@@ -245,7 +244,12 @@ Arguments:
         //Set ResultantFormat to be the only supported format for the MicArray endpoint. 
         PKSDATAFORMAT_WAVEFORMATEXTENSIBLE resultantFormat;
         resultantFormat = (PKSDATAFORMAT_WAVEFORMATEXTENSIBLE)ResultantFormat;
-        *resultantFormat = *MicArrayPinSupportedDeviceFormats;
+        KSDATAFORMAT_WAVEFORMATEXTENSIBLE* pinFormats = NULL;
+        if (GetPinSupportedDeviceFormats(KSPIN_WAVEIN_HOST, &pinFormats) == 0 || pinFormats == NULL)
+        {
+            return STATUS_NO_MATCH;
+        }
+        *resultantFormat = pinFormats[0];
         *ResultantFormatLength = requiredSize;
 
         return STATUS_SUCCESS;

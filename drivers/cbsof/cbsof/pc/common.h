@@ -125,6 +125,7 @@ typedef enum
     eSpeakerDevice = 0,
     eMicArrayDevice1,
     eHeadphoneDevice,       // cbsof: DA7219 headphone jack (SOF PCM 1)
+    eMicInDevice,           // cbsof: DA7219 headset mic (SOF PCM 1 capture); eMicArrayDevice1 = built-in DMIC (PCM 99)
     eMaxDeviceType,
 } eDeviceType;
 

@@ -749,10 +749,8 @@ Return Value:
     // Install wave+topology filters for capture devices
     //
     // cbsof milestone 4a: no capture pipelines yet (headset mic + DMIC come next)
-#if 0
     ntStatus = InstallAllCaptureFilters(DeviceObject, Irp, pAdapterCommon);
     IF_FAILED_JUMP(ntStatus, Exit);
-#endif
 
 Exit:
 

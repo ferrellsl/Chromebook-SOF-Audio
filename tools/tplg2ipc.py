@@ -30,6 +30,9 @@ TKN_VOLUME_RAMP_TYPE, TKN_VOLUME_RAMP_MS = 250, 251
 TKN_COMP_PERIOD_SINK, TKN_COMP_PERIOD_SOURCE, TKN_COMP_FORMAT, TKN_COMP_CORE_ID, TKN_COMP_UUID = \
     400, 401, 402, 404, 405
 TKN_PCM_DMAC_CONFIG = 353
+TKN_DMIC_DRIVER_VERSION, TKN_DMIC_CLK_MIN, TKN_DMIC_CLK_MAX, TKN_DMIC_DUTY_MIN, TKN_DMIC_DUTY_MAX,     TKN_DMIC_NUM_PDM_ACTIVE, TKN_DMIC_SAMPLE_RATE, TKN_DMIC_FIFO_WORD_LENGTH, TKN_DMIC_UNMUTE_RAMP_TIME_MS =     600, 601, 602, 603, 604, 605, 608, 609, 610
+TKN_DMIC_PDM_TOKENS = (700, 701, 702, 703, 704, 705, 706)   # ctrl id, mic a/b enable, polarity a/b, clk edge, skew
+DMIC_NUM_CTRL = 4          # SOF_DAI_INTEL_DMIC_NUM_CTRL
 TKN_SSP_CLKS_CONTROL, TKN_SSP_MCLK_ID, TKN_SSP_SAMPLE_BITS, TKN_SSP_FRAME_PULSE_WIDTH, \
     TKN_SSP_QUIRKS, TKN_SSP_TDM_PADDING, TKN_SSP_BCLK_DELAY = 500, 501, 502, 503, 504, 505, 506
 
@@ -169,9 +172,44 @@ def build(t, pipes):
     return msgs, pcms
 
 
+def dmic_config(link, hw, dai_index):
+    """Linux ipc3-topology.c sof_link_dmic_load: hdr.size = sizeof(struct
+    sof_ipc_dai_config) with room for SOF_DAI_INTEL_DMIC_NUM_CTRL PDM controllers."""
+    params = struct.pack("<I", 0)                                   # hdr
+    params += struct.pack("<5I", tok_link(link, TKN_DMIC_DRIVER_VERSION, 0), tok_link(link, TKN_DMIC_CLK_MIN, 0),
+                          tok_link(link, TKN_DMIC_CLK_MAX, 0), tok_link(link, TKN_DMIC_SAMPLE_RATE, 0), 0)
+    params += struct.pack("<4H", tok_link(link, TKN_DMIC_FIFO_WORD_LENGTH, 0), 0,
+                          tok_link(link, TKN_DMIC_DUTY_MIN, 0), tok_link(link, TKN_DMIC_DUTY_MAX, 0))
+    num_pdm = tok_link(link, TKN_DMIC_NUM_PDM_ACTIVE, 0)
+    params += struct.pack("<I3I5I", num_pdm, 0, 0, tok_link(link, TKN_DMIC_UNMUTE_RAMP_TIME_MS, 0), 0, 0, 0, 0, 0)
+    assert len(params) == 68
+    # PDM token sets: the i-th occurrence of each token belongs to controller i
+    pdms = [[0] * 7 for _ in range(DMIC_NUM_CTRL)]
+    seen = {}
+    for x in link.tuples:
+        if x.token in TKN_DMIC_PDM_TOKENS:
+            i = seen.get(x.token, 0)
+            seen[x.token] = i + 1
+            if i < num_pdm:
+                pdms[i][TKN_DMIC_PDM_TOKENS.index(x.token)] = x.value
+    assert 1 <= num_pdm <= DMIC_NUM_CTRL and all(seen.get(t, 0) >= num_pdm for t in TKN_DMIC_PDM_TOKENS[:3])
+    for pd in pdms:
+        params += struct.pack("<I7H3H", 0, *pd, 0, 0, 0)
+    size = 52 + len(params)
+    msg = struct.pack("<IIIIHBB", size, DAI_MSG | DAI_CONFIG, 2, dai_index, hw.fmt, 0, DAI_FLAGS_HW_PARAMS)
+    msg += bytes(32) + params
+    assert len(msg) == 52 + 68 + 24 * DMIC_NUM_CTRL
+    return msg
+
+
 def dai_config(t, w, dai_type, dai_index):
     link = next((l for l in t.links if l.name == w.sname), None)
-    if link is None or dai_type != 1:      # only SSP for now
+    if link is None:
+        return None
+    if dai_type == 2:
+        hw = next((h for h in link.hw_configs if h.id == link.default_hw_config_id), link.hw_configs[0])
+        return dmic_config(link, hw, dai_index)
+    if dai_type != 1:      # SSP and DMIC only
         return None
     hw = next((h for h in link.hw_configs if h.id == link.default_hw_config_id), link.hw_configs[0])
     fmt = hw.fmt

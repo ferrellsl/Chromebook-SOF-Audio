@@ -7,7 +7,11 @@
 #include "driver.h"
 #include <ntstrsafe.h>
 
-#define CBSOF_TPLG_PATH L"\\SystemRoot\\System32\\drivers\\cbsof\\spk.cbtp"
+// Outputs first (required); the mics are loaded after them, so a problem
+// there never costs the speakers and headphones.
+#define CBSOF_TPLG_PATH     L"\\SystemRoot\\System32\\drivers\\cbsof\\spk.cbtp"
+#define CBSOF_TPLG_MIC_PATH  L"\\SystemRoot\\System32\\drivers\\cbsof\\mic.cbtp"
+#define CBSOF_TPLG_DMIC_PATH L"\\SystemRoot\\System32\\drivers\\cbsof\\dmic.cbtp"
 
 // ---------------------------------------------------------------------------
 // CsAudio callback API (\Callback\CsAudioCallbackAPI)
@@ -122,11 +126,11 @@ typedef struct _CBTP_PCM {
 } CBTP_PCM;
 #pragma pack(pop)
 
-static NTSTATUS LoadTopology(PCBSOF_CONTEXT ctx)
+static NTSTATUS LoadTopology(PCBSOF_CONTEXT ctx, PCWSTR path, const char* label)
 {
     PUCHAR blob = NULL;
     ULONG size = 0;
-    NTSTATUS status = CbLoadFile(ctx, CBSOF_TPLG_PATH, &blob, &size);
+    NTSTATUS status = CbLoadFile(ctx, path, &blob, &size);
     if (!NT_SUCCESS(status)) {
         return status;
     }
@@ -139,15 +143,7 @@ static NTSTATUS LoadTopology(PCBSOF_CONTEXT ctx)
         return STATUS_INVALID_IMAGE_FORMAT;
     }
 
-    // Host component per (PCM id, direction), e.g. Speakers = (0, play)
-    ctx->NumPcms = 0;
     const CBTP_PCM* pcms = (const CBTP_PCM*)(blob + sizeof(*hdr));
-    for (ULONG i = 0; i < hdr->numPcms && ctx->NumPcms < CBSOF_MAX_PCMS; i++) {
-        ctx->Pcms[ctx->NumPcms].PcmId = pcms[i].pcmId;
-        ctx->Pcms[ctx->NumPcms].Capture = pcms[i].direction != 0;
-        ctx->Pcms[ctx->NumPcms].HostComp = pcms[i].hostCompId;
-        ctx->NumPcms++;
-    }
 
     ULONG off = sizeof(*hdr) + hdr->numPcms * sizeof(CBTP_PCM);
     for (ULONG i = 0; i < hdr->numMsgs; i++) {
@@ -170,10 +166,16 @@ static NTSTATUS LoadTopology(PCBSOF_CONTEXT ctx)
         off += len;
     }
     if (NT_SUCCESS(status)) {
-        CbLogV(ctx, "topology: %u messages accepted, %u PCMs", hdr->numMsgs, ctx->NumPcms);
-        for (ULONG i = 0; i < ctx->NumPcms; i++) {
-            CbLogV(ctx, "  PCM %u %s -> host comp %u", ctx->Pcms[i].PcmId,
-                  ctx->Pcms[i].Capture ? "capture" : "playback", ctx->Pcms[i].HostComp);
+        // Host component per (PCM id, direction), e.g. Speakers = (0, play);
+        // added only once all of this file's pipelines are in place.
+        CbLogV(ctx, "topology (%s): %u messages accepted", label, hdr->numMsgs);
+        for (ULONG i = 0; i < hdr->numPcms && ctx->NumPcms < CBSOF_MAX_PCMS; i++) {
+            ctx->Pcms[ctx->NumPcms].PcmId = pcms[i].pcmId;
+            ctx->Pcms[ctx->NumPcms].Capture = pcms[i].direction != 0;
+            ctx->Pcms[ctx->NumPcms].HostComp = pcms[i].hostCompId;
+            CbLogV(ctx, "  PCM %u %s -> host comp %u", pcms[i].pcmId,
+                   pcms[i].direction ? "capture" : "playback", pcms[i].hostCompId);
+            ctx->NumPcms++;
         }
     }
     ExFreePoolWithTag(blob, CBSOF_POOL_TAG);
@@ -220,11 +222,21 @@ NTSTATUS SofLoadTopology(PCBSOF_CONTEXT ctx)
     CsAudioNotify(ctx, CSAudioEndpointTypeDSP, CSAudioEndpointRegister);
     CbLogV(ctx, "codec endpoints registered: mask 0x%X (bit1 = speaker amp)", ctx->CodecEndpoints);
 
-    NTSTATUS status = LoadTopology(ctx);
+    ctx->NumPcms = 0;
+    NTSTATUS status = LoadTopology(ctx, CBSOF_TPLG_PATH, "outputs");
     ctx->TopologyLoaded = NT_SUCCESS(status) && FindHostComp(ctx, SOF_PCM_SPEAKERS, FALSE) != MAXULONG;
     if (!ctx->TopologyLoaded) {
         CbLog(ctx, "topology load failed 0x%08X", status);
         return NT_SUCCESS(status) ? STATUS_NOT_FOUND : status;
+    }
+    // Each mic on its own, so one failing never costs the other (or the outputs)
+    NTSTATUS micStatus = LoadTopology(ctx, CBSOF_TPLG_MIC_PATH, "headset mic");
+    if (!NT_SUCCESS(micStatus)) {
+        CbLog(ctx, "headset mic pipeline not loaded (0x%08X)", micStatus);
+    }
+    micStatus = LoadTopology(ctx, CBSOF_TPLG_DMIC_PATH, "built-in mics");
+    if (!NT_SUCCESS(micStatus)) {
+        CbLog(ctx, "built-in mic pipeline not loaded (0x%08X)", micStatus);
     }
     return STATUS_SUCCESS;
 }
@@ -304,12 +316,13 @@ NTSTATUS SofPcmOpen(PSOF_PCM Pcm, ULONG PcmId, BOOLEAN Capture, PMDL Mdl, ULONG 
     }
     Pcm->Instance = ctx->Instance;
     UINT32 hostComp = FindHostComp(ctx, PcmId, Capture);
-    if (hostComp == MAXULONG || Capture) {
+    if (hostComp == MAXULONG) {
         CbLog(ctx, "SofPcmOpen: no %s pipeline for PCM %u", Capture ? "capture" : "playback", PcmId);
-        return STATUS_NOT_SUPPORTED;     // playback pipelines only so far
+        return STATUS_NOT_SUPPORTED;
     }
+    // The topology's PCMs are 48 kHz; DMIC capture is 4 channels, the rest stereo.
     if (!Mdl || BufferBytes == 0 || (BufferBytes & (PAGE_SIZE - 1)) ||
-        BitsPerSample != 16 || Channels != 2 || Rate != 48000) {
+        BitsPerSample != 16 || Channels != (PcmId == SOF_PCM_DMIC ? 4u : 2u) || Rate != 48000) {
         CbLog(ctx, "SofPcmOpen: unsupported buffer/format (%u bytes, %u ch, %u Hz, %u bits)",
               BufferBytes, Channels, Rate, BitsPerSample);
         return STATUS_INVALID_PARAMETER;
@@ -326,9 +339,11 @@ NTSTATUS SofPcmOpen(PSOF_PCM Pcm, ULONG PcmId, BOOLEAN Capture, PMDL Mdl, ULONG 
     fmt.ValidBitsPerSample = (USHORT)BitsPerSample;
     fmt.ContainerSize = (USHORT)BitsPerSample;
     fmt.NumberOfChannels = (USHORT)Channels;
-    status = ctx->Bus.GetRenderStream(ctx->Bus.Context, fmt, &Pcm->Stream, &Pcm->StreamTag);
+    status = Capture
+        ? ctx->Bus.GetCaptureStream(ctx->Bus.Context, fmt, &Pcm->Stream, &Pcm->StreamTag)
+        : ctx->Bus.GetRenderStream(ctx->Bus.Context, fmt, &Pcm->Stream, &Pcm->StreamTag);
     if (!NT_SUCCESS(status)) {
-        CbLog(ctx, "GetRenderStream failed 0x%08X", status);
+        CbLog(ctx, "Get%sStream failed 0x%08X", Capture ? "Capture" : "Render", status);
         Pcm->Stream = NULL;
         return status;
     }
@@ -372,12 +387,16 @@ NTSTATUS SofPcmOpen(PSOF_PCM Pcm, ULONG PcmId, BOOLEAN Capture, PMDL Mdl, ULONG 
     Pcm->Channels = Channels;
     Pcm->Rate = Rate;
     Pcm->BitsPerSample = BitsPerSample;
+    if (Capture) {
+        Pcm->BufVa = (PSHORT)MmGetSystemAddressForMdlSafe(Mdl, NormalPagePriority | MdlMappingNoExecute);
+    }
 
     status = SendPcmParams(ctx, Pcm);
     if (!NT_SUCCESS(status)) {
         goto fail;
     }
-    CbLog(ctx, "PCM %u open: %u bytes (%u pages), tag %u", PcmId, BufferBytes, pages, Pcm->StreamTag);
+    CbLog(ctx, "PCM %u %s open: %u ch, %u bytes (%u pages), tag %u", PcmId, Capture ? "capture" : "playback",
+          Channels, BufferBytes, pages, Pcm->StreamTag);
     return STATUS_SUCCESS;
 
 fail:
@@ -446,6 +465,13 @@ NTSTATUS SofPcmPause(PSOF_PCM Pcm)
 void SofPcmClose(PSOF_PCM Pcm)
 {
     PCBSOF_CONTEXT ctx = g_Cbsof;
+    if (Pcm->Capture && Pcm->BufVa && Pcm->Started && ctx) {
+        // Peak per channel over the whole recording, in percent of full scale
+        CbLog(ctx, "PCM %u capture peaks (%% of full scale): %u %u %u %u", Pcm->PcmId,
+              Pcm->Peak[0] * 100 / 32768, Pcm->Peak[1] * 100 / 32768,
+              Pcm->Peak[2] * 100 / 32768, Pcm->Peak[3] * 100 / 32768);
+        Pcm->BufVa = NULL;
+    }
     if (!PcmUsable(ctx, Pcm)) {
         // The DSP instance this stream belonged to is gone: never touch the
         // old HDA stream. Only free our own memory.
@@ -491,5 +517,24 @@ ULONG SofPcmPosition(PSOF_PCM Pcm)
     if (!PcmUsable(ctx, Pcm) || !Pcm->Stream || !Pcm->BufferBytes) {
         return 0;
     }
-    return ctx->Bus.StreamPosition(ctx->Bus.Context, Pcm->Stream) % Pcm->BufferBytes;
+    ULONG pos = ctx->Bus.StreamPosition(ctx->Bus.Context, Pcm->Stream) % Pcm->BufferBytes;
+    if (Pcm->Capture && Pcm->BufVa && Pcm->DmaRunning && Pcm->Channels <= 4) {
+        // Track the peak of everything captured since the last call
+        ULONG frame = Pcm->Channels * sizeof(SHORT);
+        ULONG end = pos - pos % frame;
+        ULONG i = Pcm->ScanPos;
+        ULONG budget = Pcm->BufferBytes / frame;
+        while (i != end && budget--) {
+            PSHORT f = (PSHORT)((PUCHAR)Pcm->BufVa + i);
+            for (ULONG c = 0; c < Pcm->Channels; c++) {
+                LONG v = f[c];
+                ULONG a = (ULONG)(v < 0 ? -v : v);
+                if (a > Pcm->Peak[c]) Pcm->Peak[c] = a;
+            }
+            i += frame;
+            if (i >= Pcm->BufferBytes) i = 0;
+        }
+        Pcm->ScanPos = end;
+    }
+    return pos;
 }

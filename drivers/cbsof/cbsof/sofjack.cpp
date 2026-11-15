@@ -28,17 +28,19 @@ NTSYSAPI NTSTATUS NTAPI ZwWaitForSingleObject(HANDLE Handle, BOOLEAN Alertable, 
 #define DA7219_REPORTID_SPECKEYS   0x02
 #define DA7219_CONTROL_JACK_TYPE   0x01
 #define DA7219_JACK_HEADPHONE      0x01
+#define DA7219_JACK_MIC            0x02
 #define DA7219_IN_REPORT_BYTES     3
 #define DA7219_OUT_REPORT_BYTES    2
 
 static PVOID g_NotifyHandle = NULL;
 static KGUARDED_MUTEX g_JackLock;            // callback, thread handle, file handle
 static BOOLEAN g_LockInit = FALSE;
-static SOF_JACK_CALLBACK g_Callback[2] = {};
-static PVOID g_CallbackContext[2] = {};
+static SOF_JACK_CALLBACK g_Callback[SOF_JACK_SLOTS] = {};
+static PVOID g_CallbackContext[SOF_JACK_SLOTS] = {};
 // Until the DA7219 tells us otherwise, report "connected", so headphones
 // still work (as in 0.5.0) if the jack device is never found.
 static volatile LONG g_Connected = 1;
+static volatile LONG g_MicConnected = 0;    // headset mic; built-in mics win until the DA7219 reports
 static volatile LONG g_KnownState = 0;
 static HANDLE g_ThreadHandle = NULL;
 static PKTHREAD g_Thread = NULL;
@@ -80,9 +82,21 @@ BOOLEAN SofSpeakerConnected(void)
     return !g_KnownState || g_Connected == 0;
 }
 
+BOOLEAN SofHeadsetMicConnected(void)
+{
+    return g_KnownState && g_MicConnected != 0;
+}
+
+// Built-in mics count as unplugged while a headset mic is in, so Windows
+// switches the recording device too.
+BOOLEAN SofDmicConnected(void)
+{
+    return !SofHeadsetMicConnected();
+}
+
 void SofSetJackCallback(ULONG Slot, SOF_JACK_CALLBACK Callback, PVOID Context)
 {
-    if (Slot > 1) {
+    if (Slot >= SOF_JACK_SLOTS) {
         return;
     }
     if (!g_LockInit) {
@@ -96,18 +110,27 @@ void SofSetJackCallback(ULONG Slot, SOF_JACK_CALLBACK Callback, PVOID Context)
     KeReleaseGuardedMutex(&g_JackLock);
 }
 
-static void SetJackState(BOOLEAN connected)
+static void SetJackState(BOOLEAN connected, BOOLEAN mic)
 {
+    mic = mic && connected;
     LONG old = InterlockedExchange(&g_Connected, connected ? 1 : 0);
+    LONG oldMic = InterlockedExchange(&g_MicConnected, mic ? 1 : 0);
     LONG first = InterlockedExchange(&g_KnownState, 1) == 0;
-    if (old == (connected ? 1 : 0) && !first) {
+    BOOLEAN outChanged = first || old != (connected ? 1 : 0);
+    BOOLEAN micChanged = first || oldMic != (mic ? 1 : 0);
+    if (!outChanged && !micChanged) {
         return;
     }
-    JackLog("headphones %s", connected ? "plugged in" : "unplugged");
+    if (connected) {
+        JackLog("%s plugged in", mic ? "headset (headphones + mic)" : "headphones");
+    } else {
+        JackLog("headphones unplugged");
+    }
     KeAcquireGuardedMutex(&g_JackLock);
-    for (int i = 0; i < 2; i++) {
-        if (g_Callback[i]) {
-            g_Callback[i](g_CallbackContext[i], connected);
+    for (int i = 0; i < SOF_JACK_SLOTS; i++) {
+        BOOLEAN isMic = (i == SOF_JACK_SLOT_HEADSETMIC || i == SOF_JACK_SLOT_DMIC);
+        if (g_Callback[i] && (isMic ? micChanged : outChanged)) {
+            g_Callback[i](g_CallbackContext[i], isMic ? mic : connected);
         }
     }
     KeReleaseGuardedMutex(&g_JackLock);
@@ -245,7 +268,7 @@ static VOID JackThread(PVOID StartContext)
             JackLog("report %02X %02X %02X (%u bytes)", report[0], report[1], report[2], got);
             if (got >= DA7219_IN_REPORT_BYTES &&
                 report[0] == DA7219_REPORTID_SPECKEYS && report[1] == DA7219_CONTROL_JACK_TYPE) {
-                SetJackState((report[2] & DA7219_JACK_HEADPHONE) != 0);
+                SetJackState((report[2] & DA7219_JACK_HEADPHONE) != 0, (report[2] & DA7219_JACK_MIC) != 0);
             }
         }
         ZwClose(writeEvent);

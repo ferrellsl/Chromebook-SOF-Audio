@@ -62,9 +62,6 @@ Return Value:
         // Windows moves playback to the headphones and back (sofjack.cpp)
         SpeakerJackDescBridge.IsConnected = SofSpeakerConnected();
 
-        SofTrace("speaker jack read: description%s, connected %u",
-                 PropertyRequest->PropertyItem->Id == KSPROPERTY_JACK_DESCRIPTION2 ? "2" : "",
-                 (ULONG)SpeakerJackDescBridge.IsConnected);
         if (PropertyRequest->PropertyItem->Id == KSPROPERTY_JACK_DESCRIPTION)
         {
             ntStatus = pMiniport->PropertyHandlerJackDescription(
