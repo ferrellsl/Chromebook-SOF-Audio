@@ -1,0 +1,61 @@
+;
+; cbsof.inf - open SOF audio DSP driver for Gemini Lake Chromebooks
+; Milestone 2 bring-up build: boots the DSP firmware, no audio endpoints yet.
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = MEDIA
+ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = 11/14/2026,0.2.0.0
+CatalogFile = cbsof.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 12
+Cbsof_Fw_Dir   = 12,cbsof
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+cbsof.sys  = 1,,
+sof-glk.ri = 1,,
+
+[Manufacturer]
+%ProviderName% = Standard,NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%Cbsof.DeviceDesc% = Cbsof_Device, CSAUDIO\ADSP&CTLR_VEN_8086&CTLR_DEV_3198
+
+[Cbsof_Device.NT]
+CopyFiles = Cbsof_Sys, Cbsof_Fw_Dir
+
+[Cbsof_Sys]
+cbsof.sys
+
+[Cbsof_Fw_Dir]
+sof-glk.ri
+
+[Cbsof_Device.NT.Services]
+AddService = cbsof, 0x00000002, Cbsof_Service_Inst
+
+[Cbsof_Service_Inst]
+DisplayName   = %Cbsof.SvcDesc%
+ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
+StartType     = 3               ; SERVICE_DEMAND_START
+ErrorControl  = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary = %12%\cbsof.sys
+
+[Cbsof_Device.NT.Wdf]
+KmdfService = cbsof, Cbsof_WdfSect
+
+[Cbsof_WdfSect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+ProviderName     = "Chromebook SOF Audio (open)"
+DiskName         = "Chromebook SOF Audio Disk"
+Cbsof.DeviceDesc = "Chromebook SOF Audio DSP (open, bring-up)"
+Cbsof.SvcDesc    = "Chromebook SOF Audio DSP"

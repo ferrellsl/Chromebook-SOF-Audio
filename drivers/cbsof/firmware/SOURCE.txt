@@ -1,0 +1,3 @@
+sof-glk.ri: SOF v2.2 community-signed image, sof-bin release v2026.09.2 (sof/community/sof-glk.ri), md5 1c991a6c34aa28f9af5cb9a7160e3992
+sof-glk-da7219.tplg: sof-bin v2026.09.2 sof-tplg (topology v2.2.1)
+Redistributed under LICENCE.Intel.

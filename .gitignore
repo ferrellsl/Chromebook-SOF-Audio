@@ -1,0 +1,8 @@
+reference/
+x64/
+ARM64/
+Debug/
+Release/
+*.user
+.vs/
+*.aps

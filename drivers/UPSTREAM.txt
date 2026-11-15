@@ -1,0 +1,3 @@
+sklhdaudbus upstream: https://github.com/coolstar/sklhdaudbus @ 5477b93
+da7219 upstream: https://github.com/coolstar/da7219 @ cea666b
+max98357a upstream: https://github.com/coolstar/max98357a @ 4691d68
