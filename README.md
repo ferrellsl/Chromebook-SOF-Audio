@@ -18,10 +18,11 @@ with a Celeron N4020, DA7219 headset codec and MAX98357A speaker amp.
 
 ## Status
 
-Milestone 4a **works on hardware** (Bobba, build 0.4.5, 2026-11-14): `cbsof.sys`
+Milestones 4a + 4b **work on hardware** (Bobba, builds 0.4.5 and 0.5.0, 2026-11-14): `cbsof.sys`
 is a PortCls audio driver with a Windows **Speakers** endpoint on the SOF
 speaker pipeline. YouTube playback is clean in stereo; pause/resume and the
-volume slider work; the DSP powers down when idle and reboots on the next
+volume slider work; **Headphones** (DA7219) work too, switched by hand in the
+mixer; the DSP powers down when idle and reboots on the next
 sound. Headphones (DA7219, jack detection) and microphones come next. It writes its log to the
 registry:
 
