@@ -10,6 +10,8 @@
 #include "regs.h"
 #include "sof_ipc3.h"
 
+typedef int BOOL; // the bus interface uses a Win32 BOOL (int)
+
 #define CBSOF_POOL_TAG 'fSbC'
 #define CBSOF_FW_PATH  L"\\SystemRoot\\System32\\drivers\\cbsof\\sof-glk.ri"
 

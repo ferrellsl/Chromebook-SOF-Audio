@@ -479,9 +479,9 @@ static void MboxWrite(PCBSOF_CONTEXT ctx, ULONG off, const void* src, ULONG len)
 }
 
 // Called by sklhdaudbus from its ISR, at DIRQL. Latch and mask only.
-BOOL DspInterruptCallback(PVOID context)
+BOOL DspInterruptCallback(PVOID callbackContext)
 {
-    PCBSOF_CONTEXT ctx = (PCBSOF_CONTEXT)context;
+    PCBSOF_CONTEXT ctx = (PCBSOF_CONTEXT)callbackContext;
     if (!ctx || !ctx->DspBar) {
         return FALSE;
     }

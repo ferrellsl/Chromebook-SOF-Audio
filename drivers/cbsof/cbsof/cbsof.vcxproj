@@ -25,7 +25,8 @@
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
     <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
     <KMDF_VERSION_MINOR>15</KMDF_VERSION_MINOR>
-    <Inf2CatUseLocalTime>true</Inf2CatUseLocalTime>
+    <!-- scripts\package.ps1 builds the catalog and signs it -->
+    <EnableInf2cat>false</EnableInf2cat>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
     <UseDebugLibraries>true</UseDebugLibraries>
@@ -63,9 +64,6 @@
   </ItemGroup>
   <ItemGroup>
     <Inf Include="cbsof.inf" />
-  </ItemGroup>
-  <ItemGroup>
-    <FilesToPackage Include="$(MSBuildProjectDirectory)\..\firmware\sof-glk.ri" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

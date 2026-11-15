@@ -73,7 +73,7 @@ extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING Reg
 
     WDF_DRIVER_CONFIG config;
     WDF_DRIVER_CONFIG_INIT(&config, CbEvtDeviceAdd);
-    CbLog(NULL, "DriverEntry (built " __DATE__ " " __TIME__ ")");
+    CbLog(NULL, "DriverEntry");
     return WdfDriverCreate(DriverObject, RegistryPath, WDF_NO_OBJECT_ATTRIBUTES, &config, WDF_NO_HANDLE);
 }
 

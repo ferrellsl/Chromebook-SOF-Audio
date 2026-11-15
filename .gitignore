@@ -6,3 +6,5 @@ Release/
 *.user
 .vs/
 *.aps
+out/
+build/
