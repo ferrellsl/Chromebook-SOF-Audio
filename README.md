@@ -15,7 +15,7 @@ amp, for example:
 | Board | Chromebook | Status |
 |---|---|---|
 | Bobba | Acer Chromebook 311 (C733) | tested (all features) |
-| Dorp | HP Chromebook 14 G6 | testing next |
+| Dorp | HP Chromebook 14 G6 | tested (all features) |
 
 Other Gemini Lake Chromebooks (Celeron N4000/N4020/N4100/N4120, Pentium
 Silver N5000/N5030) with the same codec and amp should work too, but are
