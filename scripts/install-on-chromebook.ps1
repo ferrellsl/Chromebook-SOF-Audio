@@ -69,15 +69,50 @@ if ($ClearGuard) {
     return
 }
 
+# Every step is appended to install-progress.txt right away, so a crash in the
+# middle still leaves a record of how far it got.
+$progress = Join-Path $here "install-progress.txt"
+function Step($msg) {
+    Write-Host $msg
+    "$(Get-Date -Format HH:mm:ss) $msg" | Out-File $progress -Append
+}
+
+function Get-DspDevice {
+    Get-PnpDevice | Where-Object { $_.InstanceId -like "CSAUDIO\ADSP*" } | Select-Object -First 1
+}
+
+# Remove all cbsof packages. Only call this while the DSP device is DISABLED:
+# otherwise Windows starts another (older) cbsof package on it mid-cleanup.
+function Remove-CbsofPackages {
+    $out = pnputil /enum-drivers | Out-String
+    foreach ($m in ([regex]'Published Name:\s+(oem\d+\.inf)\s+Original Name:\s+cbsof\.inf').Matches($out)) {
+        $p = $m.Groups[1].Value
+        pnputil /delete-driver $p /force 2>&1 | Out-Null
+        Step "removed old cbsof package $p"
+    }
+    $stale = Join-Path $env:SystemRoot "System32\drivers\cbsof.sys"
+    if (Test-Path $stale) {
+        Remove-Item $stale -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path $stale)) { Step "removed old $stale" }
+    }
+}
+
+$dsp = Get-DspDevice
+if (-not $dsp) { throw "The DSP device (CSAUDIO\ADSP...) was not found. Is Coolstar's sklhdaudbus installed?" }
+
 if ($Restore) {
     $cool = Get-ChildItem "$env:SystemRoot\System32\DriverStore\FileRepository" -Directory -Filter "csaudiointcsof.inf_amd64_*" |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if (-not $cool) { throw "Coolstar's csaudiointcsof driver is not in the driver store." }
-    & $devcon update (Join-Path $cool.FullName "csaudiointcsof.inf") $hwid
-    foreach ($p in @(Get-CbsofPackages)) {
-        pnputil /delete-driver $p 2>&1 | Out-Null
-    }
-    "Restored Coolstar's SOF driver and removed cbsof from the driver store. A restart may be needed."
+    "$(Get-Date) restore" | Out-File $progress
+    Step "disabling the DSP device"
+    pnputil /disable-device "$($dsp.InstanceId)" | Out-Null
+    & $devcon update (Join-Path $cool.FullName "csaudiointcsof.inf") $hwid | Out-Null
+    Step "Coolstar driver selected"
+    Remove-CbsofPackages
+    Step "enabling the DSP device"
+    pnputil /enable-device "$($dsp.InstanceId)" | Out-Null
+    Step "Restored Coolstar's SOF driver. Restart if there is no sound."
     return
 }
 
@@ -95,23 +130,29 @@ $cer = Join-Path $here "cbsof-test.cer"
 Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
 Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
 
+"$(Get-Date) install from $here" | Out-File $progress
 Clear-Guard
 
-# Remove every older cbsof package first, so Windows can never fall back to
-# one of them, plus the pre-0.4.2 binary in System32\drivers.
-foreach ($p in @(Get-CbsofPackages)) {
-    pnputil /delete-driver $p /uninstall /force 2>&1 | Out-Null
-    "Removed old cbsof package $p from the driver store"
-}
-$stale = Join-Path $env:SystemRoot "System32\drivers\cbsof.sys"
-if (Test-Path $stale) {
-    Remove-Item $stale -Force -ErrorAction SilentlyContinue
-    if (Test-Path $stale) { "Note: $stale is in use; it is unused from 0.4.2 on." } else { "Removed old $stale" }
+# 1. Disable the DSP device, so no driver can start on it while packages change
+Step "disabling the DSP device ($($dsp.FriendlyName))"
+pnputil /disable-device "$($dsp.InstanceId)" | Out-Null
+
+# 2. Remove every older cbsof package
+Remove-CbsofPackages
+
+# 3. Put the new package on the (still disabled) device. Forced, because
+#    Coolstar's signed driver would otherwise outrank a test-signed one.
+Step "installing $(Join-Path $here 'cbsof\cbsof.inf')"
+$r = & $devcon update (Join-Path $here "cbsof\cbsof.inf") $hwid 2>&1 | Out-String
+Step "devcon: $($r.Trim())"
+if ($LASTEXITCODE -gt 1) {
+    Step "devcon update failed ($LASTEXITCODE); the DSP device stays disabled"
+    return
 }
 
-# Force our driver onto the DSP device (Coolstar's would otherwise outrank it).
-& $devcon update (Join-Path $here "cbsof\cbsof.inf") $hwid
-if ($LASTEXITCODE -gt 1) { throw "devcon update failed ($LASTEXITCODE)" }
-
+# 4. Start it
+Step "enabling the DSP device"
+pnputil /enable-device "$($dsp.InstanceId)" | Out-Null
 Start-Sleep -Seconds 5
+Step "done"
 Show-Log
