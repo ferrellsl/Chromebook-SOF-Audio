@@ -78,6 +78,11 @@
 
 // HDA controller registers (HDA BAR / BAR0)
 #define HDA_REG_GCAP            0x00
+#define HDA_REG_LLCH            0x14        // offset of the first linked capability
+#define HDA_CAP_HDR_ID(x)       (((x) >> 16) & 0xFFF)
+#define HDA_CAP_HDR_NEXT(x)     ((x) & 0xFFFF)
+#define HDA_PP_CAP_ID           0x3
+#define HDA_MAX_CAPS            10
 #define HDA_SD_BASE             0x80
 #define HDA_SD_SIZE             0x20
 #define HDA_SD_FORMAT           0x12

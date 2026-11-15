@@ -116,6 +116,37 @@ static NTSTATUS QueryAdspInterface(PDEVICE_OBJECT pdo, PADSP_BUS_INTERFACE iface
 // trust cached pointers across power transitions: fetch them again and
 // re-register on every power-up. (0.4 crashed by reading a stale BAR4.)
 // ---------------------------------------------------------------------------
+// Walk the HDA linked capability list in the CURRENT BAR0 mapping to find
+// PPCAP. sklhdaudbus fills its own ppcap pointer only when its walk succeeds
+// in PrepareHardware, so after a bus restart it can still point into the old,
+// unmapped BAR (0.4.2 crashed on that).
+static PUCHAR FindPpCap(PCBSOF_CONTEXT ctx, PUCHAR hdaBar, ULONG hdaLen)
+{
+    if (!hdaBar || hdaLen < 0x100) {
+        return NULL;
+    }
+    ULONG offset = READ_REGISTER_USHORT((volatile USHORT*)(hdaBar + HDA_REG_LLCH));
+    for (int n = 0; n < HDA_MAX_CAPS; n++) {
+        if (offset == 0 || offset + 8 > hdaLen || (offset & 3)) {
+            break;
+        }
+        ULONG cap = READ_REGISTER_ULONG((volatile ULONG*)(hdaBar + offset));
+        if (cap == 0xFFFFFFFF) {
+            CbLog(ctx, "HDA capability read returned 0xFFFFFFFF at 0x%X (controller not ready?)", offset);
+            break;
+        }
+        if (HDA_CAP_HDR_ID(cap) == HDA_PP_CAP_ID) {
+            return hdaBar + offset;
+        }
+        ULONG next = HDA_CAP_HDR_NEXT(cap);
+        if (next == offset) {
+            break;
+        }
+        offset = next;
+    }
+    return NULL;
+}
+
 static NTSTATUS RefreshBusResources(PCBSOF_CONTEXT ctx)
 {
     CB_PCI_BAR hdaBar = {}, dspBar = {};
@@ -127,9 +158,29 @@ static NTSTATUS RefreshBusResources(PCBSOF_CONTEXT ctx)
         CbLog(ctx, "GetResources failed 0x%08X", status);
         return status;
     }
-    if (!hdaBar.Base || !dspBar.Base || dspBar.Len < DSP_MBOX_UPLINK_OFFSET + 0x1000 || !ppcap) {
-        CbLog(ctx, "DSP BAR or PPCAP missing (HDA %p, DSP %p len 0x%X, PPCAP %p)",
-              hdaBar.Base, dspBar.Base, dspBar.Len, ppcap);
+    if (!hdaBar.Base || !dspBar.Base || dspBar.Len < DSP_MBOX_UPLINK_OFFSET + 0x1000) {
+        CbLog(ctx, "HDA or DSP BAR missing (HDA %p len 0x%X, DSP %p len 0x%X)",
+              hdaBar.Base, hdaBar.Len, dspBar.Base, dspBar.Len);
+        ctx->DspBar = NULL;
+        ctx->HdaBar = NULL;
+        ctx->PpCap = NULL;
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    // Our own PPCAP, inside the current HDA BAR. The bus's pointer is only
+    // logged for comparison, never used.
+    PUCHAR ourPpCap = FindPpCap(ctx, (PUCHAR)hdaBar.Base, hdaBar.Len);
+    BOOLEAN busPpCapInBar = ppcap && (PUCHAR)ppcap >= (PUCHAR)hdaBar.Base &&
+                            (PUCHAR)ppcap + 0x10 <= (PUCHAR)hdaBar.Base + hdaBar.Len;
+    CbLog(ctx, "HDA BAR %p len 0x%X, DSP BAR %p len 0x%X, PPCAP ours %p bus %p%s",
+          hdaBar.Base, hdaBar.Len, dspBar.Base, dspBar.Len, ourPpCap, ppcap,
+          busPpCapInBar ? "" : " (bus pointer is OUTSIDE the HDA BAR: stale)");
+    if (!ourPpCap || !busPpCapInBar || (PUCHAR)ppcap != ourPpCap) {
+        // If the bus's capability pointers are stale, the bus itself would
+        // crash in GetRenderStream (reads ppcap) or DSPEnableSPIB (spbcap).
+        // Leave the DSP off; restarting the PC re-initializes the bus.
+        CbLog(ctx, "HDA capabilities unusable (ours %p, bus %p): DSP left off. Restart the PC to recover.",
+              ourPpCap, ppcap);
         ctx->DspBar = NULL;
         ctx->HdaBar = NULL;
         ctx->PpCap = NULL;
@@ -291,7 +342,7 @@ NTSTATUS SofDeviceStart(PDEVICE_OBJECT Fdo)
     ctx->Fdo = Fdo;
     g_Cbsof = ctx;
 
-    CbLog(ctx, "cbsof 0.4.2 (PortCls): starting");
+    CbLog(ctx, "cbsof 0.4.3 (PortCls): starting");
 
     NTSTATUS status = PcGetPhysicalDeviceObject(Fdo, &ctx->Pdo);
     if (!NT_SUCCESS(status)) {
