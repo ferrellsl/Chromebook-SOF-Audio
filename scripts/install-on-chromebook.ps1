@@ -22,6 +22,10 @@ function Show-Log {
             Where-Object { $_.PSChildName -like "ADSP*" } | Get-ChildItem
     foreach ($k in $keys) {
         $p = Get-ItemProperty (Join-Path $k.PSPath "Device Parameters") -ErrorAction SilentlyContinue
+        if ($p.CbsofLogPrevious) {
+            "---- previous cbsof log (the start before this one) ($($k.PSChildName))"
+            $p.CbsofLogPrevious
+        }
         if ($p.CbsofLog) {
             "---- cbsof log ($($k.PSChildName))"
             $p.CbsofLog

@@ -15,9 +15,14 @@ static volatile LONG g_InstanceCounter = 0;
 void CbLog(PCBSOF_CONTEXT ctx, const char* fmt, ...)
 {
     CHAR line[256];
+    // "[  41.237] " = seconds since boot, to line up with other events
+    ULONGLONG ms = KeQueryInterruptTime() / 10000;
+    RtlStringCbPrintfA(line, sizeof(line), "[%4llu.%03llu] ", ms / 1000, ms % 1000);
+    size_t prefix = 0;
+    RtlStringCbLengthA(line, sizeof(line), &prefix);
     va_list args;
     va_start(args, fmt);
-    NTSTATUS status = RtlStringCbVPrintfA(line, sizeof(line), fmt, args);
+    NTSTATUS status = RtlStringCbVPrintfA(line + prefix, sizeof(line) - prefix, fmt, args);
     va_end(args);
     if (!NT_SUCCESS(status) && status != STATUS_BUFFER_OVERFLOW) {
         return;
@@ -47,6 +52,11 @@ void CbLog(PCBSOF_CONTEXT ctx, const char* fmt, ...)
         ctx->Log[ctx->LogLen] = 0;
     }
     KeReleaseSpinLock(&ctx->LogLock, irql);
+
+    // Save after every line so the log survives a crash.
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL) {
+        CbFlushLog(ctx);
+    }
 }
 
 void CbFlushLog(PCBSOF_CONTEXT ctx)
@@ -77,6 +87,32 @@ void CbFlushLog(PCBSOF_CONTEXT ctx)
             RtlFreeUnicodeString(&value);
         }
         ExFreePoolWithTag(copy, CBSOF_POOL_TAG);
+    }
+    ZwClose(key);
+}
+
+// Keep the previous boot's log (it may describe a crash): CbsofLog -> CbsofLogPrevious
+static void RotateLog(PCBSOF_CONTEXT ctx)
+{
+    HANDLE key;
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(ctx->Pdo, PLUGPLAY_REGKEY_DEVICE, KEY_READ | KEY_WRITE, &key))) {
+        return;
+    }
+    UNICODE_STRING cur, prev;
+    RtlInitUnicodeString(&cur, L"CbsofLog");
+    RtlInitUnicodeString(&prev, L"CbsofLogPrevious");
+    ULONG len = 0;
+    NTSTATUS status = ZwQueryValueKey(key, &cur, KeyValuePartialInformation, NULL, 0, &len);
+    if ((status == STATUS_BUFFER_TOO_SMALL || status == STATUS_BUFFER_OVERFLOW) && len > 0 && len < 64 * 1024) {
+        PKEY_VALUE_PARTIAL_INFORMATION info =
+            (PKEY_VALUE_PARTIAL_INFORMATION)ExAllocatePool2(POOL_FLAG_PAGED, len, CBSOF_POOL_TAG);
+        if (info) {
+            if (NT_SUCCESS(ZwQueryValueKey(key, &cur, KeyValuePartialInformation, info, len, &len)) &&
+                info->Type == REG_SZ) {
+                ZwSetValueKey(key, &prev, 0, REG_SZ, info->Data, info->DataLength);
+            }
+            ExFreePoolWithTag(info, CBSOF_POOL_TAG);
+        }
     }
     ZwClose(key);
 }
@@ -165,6 +201,33 @@ static NTSTATUS RefreshBusResources(PCBSOF_CONTEXT ctx)
         ctx->HdaBar = NULL;
         ctx->PpCap = NULL;
         return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    // 0.4.3 crashed reading the HDA BAR that GetResources had just returned:
+    // the bus handed out an unmapped pointer. Check every page we are about
+    // to touch before touching it, and refuse instead of crashing.
+    {
+        PUCHAR h = (PUCHAR)hdaBar.Base;
+        PUCHAR d = (PUCHAR)dspBar.Base;
+        BOOLEAN hOk = MmIsAddressValid(h) && MmIsAddressValid(h + hdaBar.Len - 4);
+        BOOLEAN dOk = MmIsAddressValid(d) &&
+                      MmIsAddressValid(d + DSP_MBOX_OFFSET) &&
+                      MmIsAddressValid(d + DSP_MBOX_UPLINK_OFFSET) &&
+                      MmIsAddressValid(d + dspBar.Len - 4);
+        BOOLEAN pOk = ppcap == NULL || MmIsAddressValid(ppcap);
+        if (!hOk || !dOk || !pOk) {
+            CbLog(ctx, "bus returned UNMAPPED resources: HDA %p len 0x%X %s, DSP %p len 0x%X %s, PPCAP %p %s",
+                  h, hdaBar.Len, hOk ? "ok" : "UNMAPPED", d, dspBar.Len, dOk ? "ok" : "UNMAPPED",
+                  ppcap, pOk ? "ok" : "UNMAPPED");
+            CbLog(ctx, "previous mappings: HDA %p, DSP %p. DSP left off.", ctx->LastHdaBar, ctx->LastDspBar);
+            ctx->DspBar = NULL;
+            ctx->HdaBar = NULL;
+            ctx->PpCap = NULL;
+            CbFlushLog(ctx);
+            return STATUS_DEVICE_CONFIGURATION_ERROR;
+        }
+        ctx->LastHdaBar = h;
+        ctx->LastDspBar = d;
     }
 
     // Our own PPCAP, inside the current HDA BAR. The bus's pointer is only
@@ -305,7 +368,12 @@ void SofDevicePowerDown(void)
         return;
     }
     if (ctx->DspBar) {
-        DspShutdown(ctx);
+        if (MmIsAddressValid(ctx->DspBar) && MmIsAddressValid(ctx->PpCap)) {
+            DspShutdown(ctx);
+        } else {
+            CbLog(ctx, "power-down: DSP BAR %p / PPCAP %p no longer mapped; skipping DSP shutdown",
+                  ctx->DspBar, ctx->PpCap);
+        }
     }
     if (ctx->InterruptRegistered) {
         ctx->Bus.UnregisterInterrupt(ctx->Bus.Context);
@@ -342,13 +410,15 @@ NTSTATUS SofDeviceStart(PDEVICE_OBJECT Fdo)
     ctx->Fdo = Fdo;
     g_Cbsof = ctx;
 
-    CbLog(ctx, "cbsof 0.4.3 (PortCls): starting");
+    CbLog(ctx, "cbsof 0.4.4 (PortCls): starting");
 
     NTSTATUS status = PcGetPhysicalDeviceObject(Fdo, &ctx->Pdo);
     if (!NT_SUCCESS(status)) {
         CbLog(ctx, "PcGetPhysicalDeviceObject failed 0x%08X", status);
         return status;
     }
+    RotateLog(ctx);
+    CbFlushLog(ctx);
 
     status = QueryAdspInterface(ctx->Pdo, &ctx->Bus);
     if (!NT_SUCCESS(status)) {

@@ -88,6 +88,8 @@ typedef struct _CBSOF_CONTEXT {
     PUCHAR DspBar;
     ULONG DspBarLen;
     PUCHAR PpCap;
+    PUCHAR LastHdaBar;      // last mappings that checked out, for the log
+    PUCHAR LastDspBar;
 
     // IPC state shared between the bus ISR callback (DIRQL), our DPC and
     // passive code. The ISR only latches doorbell values with Interlocked ops
