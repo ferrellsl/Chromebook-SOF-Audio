@@ -23,7 +23,7 @@ is a PortCls audio driver with a Windows **Speakers** endpoint on the SOF
 speaker pipeline. YouTube playback is clean in stereo; pause/resume and the
 volume slider work; **Headphones** (DA7219) work too, switched by hand in the
 mixer; the DSP powers down when idle and reboots on the next
-sound. Headphones (DA7219, jack detection) and microphones come next. It writes its log to the
+sound. Jack detection and microphones come next. It writes its log to the
 registry:
 
 ```powershell
