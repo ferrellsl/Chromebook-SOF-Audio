@@ -175,8 +175,14 @@ static void ParseExtManifest(PCBSOF_CONTEXT ctx, const UCHAR* fw, ULONG fwSize);
 // ---------------------------------------------------------------------------
 static NTSTATUS LoadFirmwareFile(PCBSOF_CONTEXT ctx, PUCHAR* data, ULONG* size)
 {
+    return CbLoadFile(ctx, CBSOF_FW_PATH, data, size);
+}
+
+// Reads a whole file into non-paged pool (passive level). Free with ExFreePoolWithTag.
+NTSTATUS CbLoadFile(PCBSOF_CONTEXT ctx, PCWSTR filePath, PUCHAR* data, ULONG* size)
+{
     UNICODE_STRING path;
-    RtlInitUnicodeString(&path, CBSOF_FW_PATH);
+    RtlInitUnicodeString(&path, filePath);
     OBJECT_ATTRIBUTES oa;
     InitializeObjectAttributes(&oa, &path, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
 
@@ -186,7 +192,7 @@ static NTSTATUS LoadFirmwareFile(PCBSOF_CONTEXT ctx, PUCHAR* data, ULONG* size)
                                    FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN,
                                    FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE, NULL, 0);
     if (!NT_SUCCESS(status)) {
-        CbLog(ctx, "cannot open %ws (0x%08X)", CBSOF_FW_PATH, status);
+        CbLog(ctx, "cannot open %ws (0x%08X)", filePath, status);
         return status;
     }
 
@@ -194,7 +200,7 @@ static NTSTATUS LoadFirmwareFile(PCBSOF_CONTEXT ctx, PUCHAR* data, ULONG* size)
     status = ZwQueryInformationFile(file, &iosb, &info, sizeof(info), FileStandardInformation);
     if (!NT_SUCCESS(status) || info.EndOfFile.QuadPart <= 0 || info.EndOfFile.QuadPart > 4 * 1024 * 1024) {
         ZwClose(file);
-        CbLog(ctx, "bad firmware file size");
+        CbLog(ctx, "bad file size for %ws", filePath);
         return NT_SUCCESS(status) ? STATUS_INVALID_IMAGE_FORMAT : status;
     }
 
@@ -209,7 +215,7 @@ static NTSTATUS LoadFirmwareFile(PCBSOF_CONTEXT ctx, PUCHAR* data, ULONG* size)
     ZwClose(file);
     if (!NT_SUCCESS(status) || iosb.Information != len) {
         ExFreePoolWithTag(buf, CBSOF_POOL_TAG);
-        CbLog(ctx, "firmware read failed 0x%08X", status);
+        CbLog(ctx, "read of %ws failed 0x%08X", filePath, status);
         return NT_SUCCESS(status) ? STATUS_END_OF_FILE : status;
     }
     *data = buf;
@@ -229,6 +235,12 @@ static NTSTATUS ClDspInit(PCBSOF_CONTEXT ctx, UINT8 streamTag)
     if (!NT_SUCCESS(status)) {
         CbLog(ctx, "  core power up failed, ADSPCS=0x%08X", DspRead(ctx, DSP_REG_ADSPCS));
         goto err;
+    }
+
+    // DSP is powered: put every SSP in clock-consumer mode (hda_ssp_set_cbp_cfp)
+    for (ULONG i = 0; i < GLK_SSP_COUNT; i++) {
+        ULONG reg = GLK_SSP_BASE_OFFSET + i * SSP_DEV_MEM_SIZE + SSP_SSC1_OFFSET;
+        DspUpdate(ctx, reg, SSP_SET_CBP_CFP, SSP_SET_CBP_CFP);
     }
 
     // step 2: ROM_CONTROL + purge, with the code loader stream tag
@@ -657,7 +669,7 @@ void DspIpcDpc(PKDPC Dpc, PVOID DeferredContext, PVOID Arg1, PVOID Arg2)
 }
 
 // Send one IPC3 message and wait for the reply (passive level).
-static NTSTATUS IpcTx(PCBSOF_CONTEXT ctx, const void* msg, ULONG len, ULONG timeoutMs)
+NTSTATUS IpcTx(PCBSOF_CONTEXT ctx, const void* msg, ULONG len, ULONG timeoutMs)
 {
     if (!ctx->FwReady || len > ctx->HostBoxSize || len > SOF_IPC_MSG_MAX_SIZE) {
         return STATUS_DEVICE_NOT_READY;
@@ -679,6 +691,31 @@ static NTSTATUS IpcTx(PCBSOF_CONTEXT ctx, const void* msg, ULONG len, ULONG time
         return STATUS_IO_TIMEOUT;
     }
     return STATUS_SUCCESS;
+}
+
+// Send a message and check the reply's error field. Logs failures.
+NTSTATUS IpcTxCheck(PCBSOF_CONTEXT ctx, const void* msg, ULONG len, const char* what)
+{
+    NTSTATUS status = IpcTx(ctx, msg, len, 500);
+    const sof_ipc_reply* reply = (const sof_ipc_reply*)ctx->ReplyBuf;
+    if (!NT_SUCCESS(status)) {
+        CbLog(ctx, "IPC %s (cmd 0x%08X): send failed 0x%08X", what, ((const sof_ipc_cmd_hdr*)msg)->cmd, status);
+        return status;
+    }
+    if (reply->error != 0) {
+        CbLog(ctx, "IPC %s (cmd 0x%08X): firmware error %d", what, ((const sof_ipc_cmd_hdr*)msg)->cmd, reply->error);
+        return STATUS_UNSUCCESSFUL;
+    }
+    if (ctx->PanicCode) {
+        CbLog(ctx, "IPC %s: firmware PANIC 0x%08X", what, ctx->PanicCode);
+        return STATUS_DEVICE_HARDWARE_ERROR;
+    }
+    return STATUS_SUCCESS;
+}
+
+ULONG DspReadReg(PCBSOF_CONTEXT ctx, ULONG off)
+{
+    return DspRead(ctx, off);
 }
 
 NTSTATUS DspIpcTest(PCBSOF_CONTEXT ctx)

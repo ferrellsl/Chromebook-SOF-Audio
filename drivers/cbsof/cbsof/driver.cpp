@@ -180,6 +180,10 @@ NTSTATUS CbEvtPrepareHardware(WDFDEVICE Device, WDFCMRESLIST Raw, WDFCMRESLIST T
         return status;
     }
     ctx->InterruptRegistered = TRUE;
+
+    // Not fatal: without it the codec drivers just won't power the amp.
+    CsAudioOpen(ctx);
+
     CbFlushLog(ctx);
     return STATUS_SUCCESS;
 }
@@ -188,6 +192,7 @@ NTSTATUS CbEvtReleaseHardware(WDFDEVICE Device, WDFCMRESLIST Translated)
 {
     UNREFERENCED_PARAMETER(Translated);
     PCBSOF_CONTEXT ctx = GetCbsofContext(Device);
+    CsAudioClose(ctx);
     if (ctx->InterruptRegistered) {
         ctx->Bus.UnregisterInterrupt(ctx->Bus.Context);
         ctx->InterruptRegistered = FALSE;
@@ -213,6 +218,11 @@ NTSTATUS CbEvtD0Entry(WDFDEVICE Device, WDF_POWER_DEVICE_STATE PreviousState)
     if (NT_SUCCESS(status)) {
         NTSTATUS ipc = DspIpcTest(ctx);
         CbLog(ctx, "IPC round-trip test 0x%08X", ipc);
+        CbFlushLog(ctx);
+        if (NT_SUCCESS(ipc)) {
+            NTSTATUS tone = DspSpeakerToneTest(ctx);
+            CbLog(ctx, "speaker tone test 0x%08X", tone);
+        }
     }
     CbFlushLog(ctx);
 

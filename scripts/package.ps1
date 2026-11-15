@@ -66,7 +66,9 @@ function FindInf($n) {
 foreach ($n in "sklhdaudbus", "da7219", "max98357a") {
     Collect $n (FindSys $n).FullName (FindInf $n) @()
 }
-Collect "cbsof" (FindSys "cbsof").FullName (FindInf "cbsof") @(Join-Path $root "drivers\cbsof\firmware\sof-glk.ri")
+Collect "cbsof" (FindSys "cbsof").FullName (FindInf "cbsof") @(
+    (Join-Path $root "drivers\cbsof\firmware\sof-glk.ri"),
+    (Join-Path $root "drivers\cbsof\firmware\spk.cbtp"))
 
 Copy-Item (Join-Path $root "scripts\install-on-chromebook.ps1") $out
 Copy-Item "C:\Program Files (x86)\Windows Kits\10\Tools\10.0.26100.0\x64\devcon.exe" $out

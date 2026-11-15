@@ -111,6 +111,11 @@ typedef struct _CBSOF_CONTEXT {
     struct sof_ipc_fw_ready FwReadyMsg;
     UCHAR ReplyBuf[SOF_IPC_MSG_MAX_SIZE];
 
+    // Coolstar CsAudio callback API (codec drivers)
+    PCALLBACK_OBJECT CsAudioCallbackObj;
+    PVOID CsAudioRegistration;
+    volatile LONG CodecEndpoints;   // bit per CSAudioEndpointType that registered
+
     // Bring-up log, copied to the registry so it can be read without a debugger
     CHAR Log[CBSOF_LOG_SIZE];
     ULONG LogLen;
@@ -126,5 +131,14 @@ void CbFlushLog(PCBSOF_CONTEXT ctx);
 NTSTATUS DspBoot(PCBSOF_CONTEXT ctx);
 void DspShutdown(PCBSOF_CONTEXT ctx);
 NTSTATUS DspIpcTest(PCBSOF_CONTEXT ctx);
+NTSTATUS CbLoadFile(PCBSOF_CONTEXT ctx, PCWSTR filePath, PUCHAR* data, ULONG* size);
+NTSTATUS IpcTx(PCBSOF_CONTEXT ctx, const void* msg, ULONG len, ULONG timeoutMs);
+NTSTATUS IpcTxCheck(PCBSOF_CONTEXT ctx, const void* msg, ULONG len, const char* what);
+ULONG DspReadReg(PCBSOF_CONTEXT ctx, ULONG off);
+
+// tone.cpp
+NTSTATUS CsAudioOpen(PCBSOF_CONTEXT ctx);
+void CsAudioClose(PCBSOF_CONTEXT ctx);
+NTSTATUS DspSpeakerToneTest(PCBSOF_CONTEXT ctx);
 BOOL DspInterruptCallback(PVOID context);
 KDEFERRED_ROUTINE DspIpcDpc;

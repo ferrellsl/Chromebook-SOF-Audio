@@ -69,6 +69,20 @@
 #define GLK_CORE_MASK_ALL       0x3
 #define GLK_CORE_MASK_INIT      0x1
 
+// SSP ports inside BAR4 (APL/GLK)
+#define GLK_SSP_BASE_OFFSET     0x2000
+#define GLK_SSP_COUNT           6
+#define SSP_DEV_MEM_SIZE        0x1000
+#define SSP_SSC1_OFFSET         0x4
+#define SSP_SET_CBP_CFP         ((1u << 25) | (1u << 24))   // SCLK + SFRM consumer
+
+// HDA controller registers (HDA BAR / BAR0)
+#define HDA_REG_GCAP            0x00
+#define HDA_SD_BASE             0x80
+#define HDA_SD_SIZE             0x20
+#define HDA_SD_FORMAT           0x12
+#define PPCTL_PROCEN(idx)       (1u << (idx))
+
 // HDA BDL entry
 #pragma pack(push, 1)
 typedef struct _HDA_BDLE {

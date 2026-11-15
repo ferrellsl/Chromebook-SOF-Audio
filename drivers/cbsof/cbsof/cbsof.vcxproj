@@ -56,6 +56,7 @@
   <ItemGroup>
     <ClCompile Include="driver.cpp" />
     <ClCompile Include="dsp.cpp" />
+    <ClCompile Include="tone.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="driver.h" />

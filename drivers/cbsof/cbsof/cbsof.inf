@@ -1,6 +1,6 @@
 ;
 ; cbsof.inf - open SOF audio DSP driver for Gemini Lake Chromebooks
-; Milestone 2 bring-up build: boots the DSP firmware, no audio endpoints yet.
+; Milestone 3 bring-up build: boots the DSP, loads the speaker pipeline, plays a 3 s test tone.
 ;
 
 [Version]
@@ -8,7 +8,7 @@ Signature   = "$WINDOWS NT$"
 Class       = MEDIA
 ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
 Provider    = %ProviderName%
-DriverVer   = 11/14/2026,0.2.0.0
+DriverVer   = 11/14/2026,0.3.0.0
 CatalogFile = cbsof.cat
 PnpLockdown = 1
 
@@ -22,6 +22,7 @@ Cbsof_Fw_Dir   = 12,cbsof
 [SourceDisksFiles]
 cbsof.sys  = 1,,
 sof-glk.ri = 1,,
+spk.cbtp   = 1,,
 
 [Manufacturer]
 %ProviderName% = Standard,NT$ARCH$.10.0...16299
@@ -37,6 +38,7 @@ cbsof.sys
 
 [Cbsof_Fw_Dir]
 sof-glk.ri
+spk.cbtp
 
 [Cbsof_Device.NT.Services]
 AddService = cbsof, 0x00000002, Cbsof_Service_Inst
