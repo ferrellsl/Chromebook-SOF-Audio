@@ -18,6 +18,7 @@ Abstract:
 #include "mintopo.h"
 #include "headphonetopo.h"
 #include "headphonetoptable.h"
+#include "..\sofapi.h"
 
 
 #pragma code_seg("PAGE")
@@ -57,6 +58,9 @@ Return Value:
 
     if (IsEqualGUIDAligned(*PropertyRequest->PropertyItem->Set, KSPROPSETID_Jack))
     {
+        // cbsof: the live jack state from the DA7219 (sofjack.cpp)
+        HeadphoneJackDescBridge.IsConnected = SofHeadphoneConnected();
+
         if (PropertyRequest->PropertyItem->Id == KSPROPERTY_JACK_DESCRIPTION)
         {
             ntStatus = pMiniport->PropertyHandlerJackDescription(
@@ -71,13 +75,53 @@ Return Value:
                 PropertyRequest,
                 ARRAYSIZE(HeadphoneJackDescriptions),
                 HeadphoneJackDescriptions,
-                0 // jack capabilities
+                JACKDESC2_PRESENCE_DETECT_CAPABILITY // the DA7219 detects plug/unplug
                 );
         }
     }
 
     return ntStatus;
 } // PropertyHandler_HeadphoneTopoFilter
+
+//=============================================================================
+// cbsof: KSEVENT_PINCAPS_JACKINFOCHANGE on the headphone jack pin. Windows
+// enables it; we raise it from the jack callback below.
+NTSTATUS
+EventHandler_HeadphoneJack
+(
+    _In_ PPCEVENT_REQUEST EventRequest
+)
+{
+    PAGED_CODE();
+    PCMiniportTopology pMiniport = (PCMiniportTopology)EventRequest->MajorTarget;
+    if (EventRequest->Verb == PCEVENT_VERB_ADD) {
+        pMiniport->AddEventToEventList(EventRequest->EventEntry);
+    }
+    // PCEVENT_VERB_REMOVE / SUPPORT: nothing to do
+    return STATUS_SUCCESS;
+}
+
+#pragma code_seg()
+//=============================================================================
+// Called by sofjack.cpp (PASSIVE_LEVEL) when the jack state changes
+VOID
+HeadphoneJackChanged
+(
+    _In_ PVOID   Context,
+    _In_ BOOLEAN Connected
+)
+{
+    UNREFERENCED_PARAMETER(Connected);
+    PCMiniportTopology pMiniport = (PCMiniportTopology)Context;
+    pMiniport->GenerateEventList(
+        (GUID*)&KSEVENTSETID_PinCapsChange,
+        KSEVENT_PINCAPS_JACKINFOCHANGE,
+        TRUE,                       // pin event
+        KSPIN_TOPO_LINEOUT_DEST,    // the jack pin
+        FALSE,
+        ULONG(-1));
+}
+#pragma code_seg("PAGE")
 
 //=============================================================================
 NTSTATUS

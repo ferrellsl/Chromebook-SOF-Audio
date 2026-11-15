@@ -59,6 +59,7 @@
     <ClCompile Include="dsp.cpp" />
     <ClCompile Include="sofdevice.cpp" />
     <ClCompile Include="sofpcm.cpp" />
+    <ClCompile Include="sofjack.cpp" />
     <!-- PortCls endpoints, from Microsoft SimpleAudioSample (MS-PL) -->
     <ClCompile Include="pc\adapter.cpp" />
     <ClCompile Include="pc\common.cpp" />

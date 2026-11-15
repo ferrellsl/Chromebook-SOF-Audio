@@ -41,6 +41,14 @@ void SofDeviceStop(void);
 void SofDevicePowerDown(void);
 NTSTATUS SofDevicePowerUp(void);
 
+// sofjack.cpp: headphone jack state from the DA7219 driver's HID reports.
+// The callback runs at PASSIVE_LEVEL on the listener thread when the state changes.
+typedef VOID (*SOF_JACK_CALLBACK)(PVOID Context, BOOLEAN Connected);
+NTSTATUS SofJackStart(PDRIVER_OBJECT DriverObject);
+void SofJackStop(void);
+BOOLEAN SofHeadphoneConnected(void);
+void SofSetHeadphoneJackCallback(SOF_JACK_CALLBACK Callback, PVOID Context);
+
 // sofpcm.cpp: called from the WaveRT stream (PASSIVE_LEVEL except Position)
 NTSTATUS SofPcmOpen(PSOF_PCM Pcm, ULONG PcmId, BOOLEAN Capture, PMDL Mdl, ULONG BufferBytes,
                     ULONG Channels, ULONG Rate, ULONG BitsPerSample);

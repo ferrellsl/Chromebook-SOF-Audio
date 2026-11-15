@@ -420,7 +420,7 @@ NTSTATUS SofDeviceStart(PDEVICE_OBJECT Fdo)
     ctx->Fdo = Fdo;
     g_Cbsof = ctx;
 
-    CbLog(ctx, "cbsof 0.5.0 (PortCls): starting");
+    CbLog(ctx, "cbsof 0.5.1 (PortCls): starting");
 
     NTSTATUS status = PcGetPhysicalDeviceObject(Fdo, &ctx->Pdo);
     if (!NT_SUCCESS(status)) {
@@ -449,6 +449,9 @@ NTSTATUS SofDeviceStart(PDEVICE_OBJECT Fdo)
 
     CsAudioOpen(ctx);
 
+    // Headphone jack detection from the DA7219 driver (independent of the DSP)
+    SofJackStart(Fdo->DriverObject);
+
     // A DSP failure is logged but does not fail the device, so the endpoints
     // still appear and the log stays readable.
     SofDevicePowerUp();
@@ -462,6 +465,7 @@ void SofDeviceStop(void)
         return;
     }
     CbLog(ctx, "device stopping");
+    SofJackStop();
     SofDevicePowerDown();
     if (ctx->BusHeldD0 && ctx->BusValid) {
         ctx->Bus.SetDSPPowerState(ctx->Bus.Context, PowerDeviceD3);    // let the bus idle again

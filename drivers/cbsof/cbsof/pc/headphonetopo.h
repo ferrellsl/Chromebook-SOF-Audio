@@ -19,4 +19,8 @@ NTSTATUS PropertyHandler_HeadphoneTopoFilter(_In_ PPCPROPERTY_REQUEST PropertyRe
 
 NTSTATUS PropertyHandler_HeadphoneTopology(_In_ PPCPROPERTY_REQUEST PropertyRequest);
 
+// cbsof: jack detection
+NTSTATUS EventHandler_HeadphoneJack(_In_ PPCEVENT_REQUEST EventRequest);
+VOID HeadphoneJackChanged(_In_ PVOID Context, _In_ BOOLEAN Connected);
+
 #endif // _SIMPLEAUDIOSAMPLE_HEADPHONETOPO_H_

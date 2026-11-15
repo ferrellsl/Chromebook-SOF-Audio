@@ -37,6 +37,22 @@ PKSDATARANGE HeadphoneTopoPinDataRangePointersBridge[] =
 };
 
 //=============================================================================
+// cbsof: jack-change event on the jack pin (Windows enables it, sofjack.cpp
+// raises it when the DA7219 reports plug/unplug)
+static
+PCEVENT_ITEM HeadphoneJackPinEvents[] =
+{
+    {
+        &KSEVENTSETID_PinCapsChange,
+        KSEVENT_PINCAPS_JACKINFOCHANGE,
+        KSEVENT_TYPE_ENABLE | KSEVENT_TYPE_BASICSUPPORT,
+        EventHandler_HeadphoneJack
+    }
+};
+
+DEFINE_PCAUTOMATION_TABLE_EVENT(AutomationHeadphoneJackPin, HeadphoneJackPinEvents);
+
+//=============================================================================
 static
 PCPIN_DESCRIPTOR HeadphoneTopoMiniportPins[] =
 {
@@ -65,7 +81,7 @@ PCPIN_DESCRIPTOR HeadphoneTopoMiniportPins[] =
     0,
     0,
     0,                                                  // InstanceCount
-    NULL,                                               // AutomationTable
+    &AutomationHeadphoneJackPin,                        // AutomationTable: jack-change event
     {                                                   // KsPinDescriptor
       0,                                                // InterfacesCount
       NULL,                                             // Interfaces
@@ -92,7 +108,7 @@ KSJACK_DESCRIPTION HeadphoneJackDescBridge =
     eGeoLocLeft,
     eGenLocPrimaryBox,
     ePortConnJack,
-    TRUE
+    TRUE                                        // updated from the DA7219 on every query
 };
 
 // Only return a KSJACK_DESCRIPTION for the physical bridge pin.

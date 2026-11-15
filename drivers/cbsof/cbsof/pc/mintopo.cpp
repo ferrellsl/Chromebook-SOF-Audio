@@ -17,6 +17,8 @@ Abstract:
 #include "endpoints.h"
 #include "minwavert.h"
 #include "mintopo.h"
+#include "headphonetopo.h"
+#include "..\sofapi.h"
 
 //=============================================================================
 #pragma code_seg("PAGE")
@@ -105,6 +107,11 @@ Return Value:
     PAGED_CODE();
 
     DPF_ENTER(("[CMiniportTopology::~CMiniportTopology]"));
+
+    // cbsof: stop jack callbacks into this object
+    if (m_DeviceType == eHeadphoneDevice) {
+        SofSetHeadphoneJackCallback(NULL, NULL);
+    }
 } // ~CMiniportTopology
 
 //=============================================================================
@@ -255,6 +262,11 @@ Return Value:
         ntStatus,
         DPF(D_ERROR, ("Init: CMiniportTopologySimpleAudioSample::Init failed, 0x%x", ntStatus)),
         Done);
+
+    // cbsof: the headphone filter raises jack-change events from sofjack.cpp
+    if (m_DeviceType == eHeadphoneDevice) {
+        SofSetHeadphoneJackCallback(HeadphoneJackChanged, this);
+    }
 
 Done:
     return ntStatus;
