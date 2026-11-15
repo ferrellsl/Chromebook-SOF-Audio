@@ -1,0 +1,25 @@
+Chromebook SOF Audio (open)
+===========================
+
+Open Windows 10/11 audio drivers for Intel Gemini Lake Chromebooks
+(Celeron N4000/N4020/N4100/N4120, Pentium Silver N5000/N5030) running
+MrChromebox UEFI firmware, with the DA7219 headset codec and MAX98357A
+speaker amp (Google "Octopus" boards, e.g. Acer Chromebook 311 "Bobba",
+HP Chromebook 14 G6 "Dorp").
+
+Speakers, headphones, the headset mic and the built-in mics work, with
+automatic switching when a headset is plugged in or out.
+
+Before you continue:
+
+- The drivers are TEST-SIGNED. The installer turns on Windows test signing
+  (bcdedit /set testsigning on) and trusts this project's test certificate.
+  Windows then shows "Test Mode" in a corner of the desktop.
+- Secure Boot must be OFF in the firmware setup, or test-signed drivers
+  cannot load. The installer stops without changing anything if it is on.
+- If CoolStar's audio driver is installed, this installer takes over the
+  audio DSP device. Uninstalling this program gives it back.
+- Restart when the installer asks you to.
+
+This is an independent project, not affiliated with Google, Intel or
+CoolStar. Use at your own risk.

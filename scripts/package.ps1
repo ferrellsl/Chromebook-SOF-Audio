@@ -73,5 +73,32 @@ Collect "cbsof" (FindSys "cbsof").FullName (FindInf "cbsof") @(
     (Join-Path $root "drivers\cbsof\firmware\dmic.cbtp"))
 
 Copy-Item (Join-Path $root "scripts\install-on-chromebook.ps1") $out
-Copy-Item "C:\Program Files (x86)\Windows Kits\10\Tools\10.0.26100.0\x64\devcon.exe" $out
+Copy-Item (Join-Path $root "scripts\get-3-logs.ps1") $out
+$lic = Join-Path $out "licenses"
+New-Item -ItemType Directory -Force $lic | Out-Null
+Copy-Item (Join-Path $root "LICENSE") (Join-Path $lic "LICENSE-cbsof-MIT.txt")
+Copy-Item (Join-Path $root "THIRD-PARTY-NOTICES.md") $lic
+Copy-Item (Join-Path $root "drivers\sklhdaudbus\LICENSE.txt") (Join-Path $lic "LICENSE-sklhdaudbus-BSD3.txt")
+Copy-Item (Join-Path $root "drivers\da7219\LICENSE.txt") (Join-Path $lic "LICENSE-da7219-Apache2.txt")
+Copy-Item (Join-Path $root "drivers\max98357a\LICENSE.txt") (Join-Path $lic "LICENSE-max98357a-Apache2.txt")
+Copy-Item (Join-Path $root "drivers\cbsof\cbsof\pc\LICENSE-MS-PL.txt") (Join-Path $lic "LICENSE-SimpleAudioSample-MS-PL.txt")
+Copy-Item (Join-Path $root "drivers\cbsof\firmware\LICENCE.Intel") (Join-Path $lic "LICENCE-SOF-firmware-Intel.txt")
+Remove-Item (Join-Path $out "devcon.exe") -ErrorAction SilentlyContinue   # no longer needed (newdev.dll)
 Write-Host "Packages are in $out"
+
+# ---- installer and zip (version from the source INF's DriverVer) -------------
+$ver = (Select-String -Path (Join-Path $root "drivers\cbsof\cbsof\cbsof.inf") -Pattern 'DriverVer\s*=\s*[^,]+,(\d+\.\d+\.\d+)').Matches[0].Groups[1].Value
+$iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+if (Test-Path $iscc) {
+    & $iscc /Q "/DAppVersion=$ver" "/DPackageDir=$out" "/DOutDir=$(Join-Path $root 'out\release')" (Join-Path $root "installer\cbsof.iss")
+    if ($LASTEXITCODE -ne 0) { throw "installer build failed" }
+}
+$zipDir = Join-Path $root "out\release\cbsof-$ver"
+Remove-Item $zipDir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $zipDir | Out-Null
+Copy-Item (Join-Path $out "*") $zipDir -Recurse
+Copy-Item (Join-Path $root "scripts\cleanup-safemode.ps1") $zipDir
+$zip = Join-Path $root "out\release\cbsof-$ver.zip"
+Remove-Item $zip -ErrorAction SilentlyContinue
+Compress-Archive -Path $zipDir -DestinationPath $zip
+Write-Host "Release files (version $ver) are in $(Join-Path $root 'out\release')"

@@ -1,21 +1,24 @@
 # Run on the Chromebook, in an elevated PowerShell, from the package folder.
 #
-#   .\install-on-chromebook.ps1             install the open cbsof driver
+#   .\install-on-chromebook.ps1             install (or update) the open cbsof DSP driver
+#   .\install-on-chromebook.ps1 -Setup      full install (used by the installer): also turns
+#                                           on test signing, trusts the test certificate and
+#                                           adds the bus and codec drivers
+#   .\install-on-chromebook.ps1 -Uninstall  remove cbsof; the DSP device goes back to the
+#                                           driver it had before (e.g. Coolstar's), if any
 #   .\install-on-chromebook.ps1 -ShowLog    show what cbsof reported
 #   .\install-on-chromebook.ps1 -Restore    switch the DSP device back to Coolstar's driver
 #   .\install-on-chromebook.ps1 -ClearGuard let cbsof try the DSP again after it
 #                                           detected a crash and left the DSP off
 #
-# Only the DSP device (CSAUDIO\ADSP...) changes. Coolstar's bus and codec
-# drivers stay installed, and Coolstar's driver stays in the driver store so
-# -Restore can put it back. Older cbsof packages are removed from the driver
-# store, so a Windows rollback goes to Coolstar's driver, not an old cbsof.
-param([switch]$Restore, [switch]$ShowLog, [switch]$ClearGuard)
+# Only the DSP device (CSAUDIO\ADSP...) is forced onto cbsof. Older cbsof
+# packages are removed from the driver store, so a Windows rollback never goes
+# to an old cbsof.
+param([switch]$Restore, [switch]$ShowLog, [switch]$ClearGuard, [switch]$Setup, [switch]$Uninstall)
 
 $ErrorActionPreference = "Stop"
 $here = $PSScriptRoot
 $hwid = "CSAUDIO\ADSP&CTLR_VEN_8086&CTLR_DEV_3198"
-$devcon = Join-Path $here "devcon.exe"
 
 function Show-Log {
     $keys = Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Enum\CSAUDIO" -ErrorAction SilentlyContinue |
@@ -57,17 +60,6 @@ function Clear-Guard {
         }
 }
 
-# Driver-store packages whose original INF is cbsof.inf, e.g. "oem12.inf"
-function Get-CbsofPackages {
-    $out = pnputil /enum-drivers | Out-String
-    $blocks = $out -split "(\r?\n){2,}"
-    foreach ($b in $blocks) {
-        if ($b -match "Original Name:\s+cbsof\.inf" -and $b -match "Published Name:\s+(oem\d+\.inf)") {
-            $Matches[1]
-        }
-    }
-}
-
 if ($ShowLog) { Show-Log; return }
 
 if ($ClearGuard) {
@@ -104,32 +96,113 @@ function Remove-CbsofPackages {
     }
 }
 
-$dsp = Get-DspDevice
-if (-not $dsp) { throw "The DSP device (CSAUDIO\ADSP...) was not found. Is Coolstar's sklhdaudbus installed?" }
-
-# Check the tools BEFORE changing anything, so a missing file can never leave
-# the DSP device disabled half-way through.
-Get-ChildItem $here -Recurse -File | Unblock-File -ErrorAction SilentlyContinue
-if (-not (Test-Path $devcon)) {
-    "devcon.exe is missing from $here, so nothing was changed."
-    "Windows Defender may have quarantined it: Windows Security > Virus & threat protection >"
-    "Protection history > restore devcon.exe (Microsoft's driver tool), then run this again."
-    if ($dsp.Status -ne "OK") {
-        pnputil /enable-device "$($dsp.InstanceId)" | Out-Null
-        "(The DSP device was not running, so it has been re-enabled.)"
-    }
-    return
+# Force a driver onto the devices with this hardware ID (what "devcon update"
+# does), through newdev.dll. Forced, because an installed, properly signed
+# driver (such as Coolstar's) outranks a test-signed one.
+$newdevSrc = @"
+using System;
+using System.Runtime.InteropServices;
+public static class CbsofNewDev {
+    [DllImport("newdev.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool UpdateDriverForPlugAndPlayDevicesW(IntPtr hwnd, string hardwareId,
+        string fullInfPath, uint installFlags, out bool rebootRequired);
 }
-if (-not $Restore -and -not (Test-Path (Join-Path $here "cbsof\cbsof.inf"))) {
+"@
+function Update-DriverForced($inf, $id) {
+    if (-not ("CbsofNewDev" -as [type])) { Add-Type -TypeDefinition $newdevSrc }
+    $reboot = $false
+    $ok = [CbsofNewDev]::UpdateDriverForPlugAndPlayDevicesW([IntPtr]::Zero, $id, $inf, 1, [ref]$reboot)   # INSTALLFLAG_FORCE
+    $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    [pscustomobject]@{ Ok = $ok; Error = ('0x{0:X8}' -f $err); Reboot = $reboot }
+}
+
+# Only for Gemini Lake Chromebooks: the audio DSP PCI device must be present.
+if (-not (Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like "PCI\VEN_8086&DEV_3198*" })) {
+    "This is not a Gemini Lake (Celeron N4000/N4020/N4100/N4120, Pentium N5000/N5030) Chromebook:"
+    "its audio DSP (PCI 8086:3198) was not found. Nothing was changed."
+    exit 2
+}
+
+Get-ChildItem $here -Recurse -File | Unblock-File -ErrorAction SilentlyContinue
+if (-not $Restore -and -not $Uninstall -and -not (Test-Path (Join-Path $here "cbsof\cbsof.inf"))) {
     "cbsof\cbsof.inf is missing from $here, so nothing was changed. Extract the whole zip again."
-    return
+    exit 2
+}
+
+$mode = if ($Setup) { "setup" } elseif ($Uninstall) { "uninstall" } elseif ($Restore) { "restore" } else { "install" }
+"$(Get-Date) $mode from $here" | Out-File $progress
+
+if ($Setup) {
+    # Secure Boot blocks test-signed drivers, so nothing below would help.
+    $sb = $false
+    try { $sb = Confirm-SecureBootUEFI } catch { $sb = $false }
+    if ($sb) {
+        Step "Secure Boot is ON. Turn it off in the firmware setup, then run the installer again. Nothing was changed."
+        exit 3
+    }
+    $bcd = bcdedit /enum "{current}" | Out-String
+    if ($bcd -notmatch "testsigning\s+Yes") {
+        bcdedit /set testsigning on | Out-Null
+        Step "test signing turned on (takes effect after the restart)"
+    }
+    $cer = Join-Path $here "cbsof-test.cer"
+    Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+    Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
+    Step "test certificate trusted"
+    # The bus and codec drivers (Coolstar's open-source drivers, built from
+    # source). Where Coolstar's own signed copies are installed, Windows keeps those.
+    foreach ($n in "sklhdaudbus", "da7219", "max98357a") {
+        $inf = Join-Path $here "$n\$n.inf"
+        pnputil /add-driver $inf /install 2>&1 | Out-Null
+        Step "$n driver added (pnputil exit $LASTEXITCODE)"
+    }
+} elseif (-not $Uninstall -and -not $Restore) {
+    $bcd = bcdedit /enum "{current}" | Out-String
+    if ($bcd -notmatch "testsigning\s+Yes") {
+        "Test signing is OFF. Turn it on, restart, then run this script again:"
+        "    bcdedit /set testsigning on"
+        "(Secure Boot must be disabled in the firmware setup for this to work.)"
+        exit 3
+    }
+    $cer = Join-Path $here "cbsof-test.cer"
+    Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+    Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
+}
+
+$dsp = Get-DspDevice
+if (-not $dsp) {
+    if ($Uninstall -or $Restore) {
+        Step "The DSP device (CSAUDIO\ADSP...) was not found."
+        if ($Uninstall) {
+            $out = pnputil /enum-drivers | Out-String
+            foreach ($m in ([regex]'Published Name:\s+(oem\d+\.inf)\s+Original Name:\s+cbsof\.inf').Matches($out)) {
+                pnputil /delete-driver $m.Groups[1].Value /force 2>&1 | Out-Null
+            }
+            Step "cbsof packages removed"
+            exit 0
+        }
+        exit 2
+    }
+    # The bus driver creates the DSP device. On a machine that had no audio
+    # drivers yet it appears after the restart, and gets cbsof then.
+    pnputil /add-driver (Join-Path $here "cbsof\cbsof.inf") /install 2>&1 | Out-Null
+    Step "cbsof added; the DSP device appears after the restart and will use it"
+    exit 0
+}
+
+if ($Uninstall) {
+    Step "disabling the DSP device"
+    pnputil /disable-device "$($dsp.InstanceId)" | Out-Null
+    Remove-CbsofPackages
+    pnputil /enable-device "$($dsp.InstanceId)" | Out-Null
+    Step "cbsof removed; after the restart the DSP device uses its previous driver, if there is one"
+    exit 0
 }
 
 if ($Restore) {
     $cool = Get-ChildItem "$env:SystemRoot\System32\DriverStore\FileRepository" -Directory -Filter "csaudiointcsof.inf_amd64_*" |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if (-not $cool) { throw "Coolstar's csaudiointcsof driver is not in the driver store." }
-    "$(Get-Date) restore" | Out-File $progress
     Step "disabling the DSP device"
     pnputil /disable-device "$($dsp.InstanceId)" | Out-Null
     Remove-CbsofPackages
@@ -137,30 +210,12 @@ if ($Restore) {
     pnputil /enable-device "$($dsp.InstanceId)" | Out-Null
     Start-Sleep -Seconds 3
     # Coolstar's is now the only driver for it; make sure it is the one in use.
-    $old = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    $r = & $devcon update (Join-Path $cool.FullName "csaudiointcsof.inf") $hwid 2>&1 | Out-String
-    $ErrorActionPreference = $old
-    Step "devcon (exit $LASTEXITCODE): $($r.Trim())"
+    $u = Update-DriverForced (Join-Path $cool.FullName "csaudiointcsof.inf") $hwid
+    Step "driver update: ok=$($u.Ok) error=$($u.Error)"
     Step "Restored Coolstar's SOF driver. Restart if there is no sound."
-    return
+    exit 0
 }
 
-# Test signing must be on (Secure Boot off).
-$bcd = bcdedit /enum "{current}" | Out-String
-if ($bcd -notmatch "testsigning\s+Yes") {
-    "Test signing is OFF. Turn it on, restart, then run this script again:"
-    "    bcdedit /set testsigning on"
-    "(Secure Boot must be disabled in the firmware setup for this to work.)"
-    return
-}
-
-# Trust the test certificate.
-$cer = Join-Path $here "cbsof-test.cer"
-Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
-
-"$(Get-Date) install from $here" | Out-File $progress
 Clear-Guard
 
 # 1. Disable the DSP device, so no driver can start on it while packages change
@@ -170,25 +225,22 @@ pnputil /disable-device "$($dsp.InstanceId)" | Out-Null
 # 2. Remove every older cbsof package, so nothing old is left to fall back to
 Remove-CbsofPackages
 
-# 3. Re-enable: the only driver left is Coolstar's, so that is what starts
-Step "enabling the DSP device (Coolstar's driver for now)"
+# 3. Re-enable. Until step 4 its previous driver (e.g. Coolstar's) runs it, or
+#    none; that is expected.
+Step "enabling the DSP device (its previous driver runs until the next step)"
 pnputil /enable-device "$($dsp.InstanceId)" | Out-Null
 Start-Sleep -Seconds 3
 
-# 4. Swap it to cbsof. Forced with devcon, because Coolstar's signed driver
-#    would otherwise outrank a test-signed one. (devcon cannot update a
-#    disabled device, which is why step 3 comes first.)
+# 4. Swap it to cbsof, forced. (A disabled device cannot be updated, which is
+#    why step 3 comes first.)
 Step "installing $(Join-Path $here 'cbsof\cbsof.inf')"
-$old = $ErrorActionPreference
-$ErrorActionPreference = "Continue"
-$r = & $devcon update (Join-Path $here "cbsof\cbsof.inf") $hwid 2>&1 | Out-String
-$rc = $LASTEXITCODE
-$ErrorActionPreference = $old
-Step "devcon (exit $rc): $($r.Trim())"
-if ($rc -gt 1) {
-    Step "devcon update failed; the DSP device stays on Coolstar's driver"
-    return
+$u = Update-DriverForced (Join-Path $here "cbsof\cbsof.inf") $hwid
+Step "driver update: ok=$($u.Ok) error=$($u.Error) reboot=$($u.Reboot)"
+if (-not $u.Ok) {
+    Step "installing cbsof failed; the DSP device stays on its previous driver"
+    exit 4
 }
 Start-Sleep -Seconds 5
-Step "done"
-Show-Log
+Step "done. Restart Windows to finish."
+if (-not $Setup) { Show-Log }
+exit 0
