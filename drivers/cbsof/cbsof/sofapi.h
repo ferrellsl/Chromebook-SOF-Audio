@@ -53,6 +53,8 @@ BOOLEAN SofSpeakerConnected(void);      // FALSE while headphones are plugged in
 #define SOF_JACK_SLOT_HEADPHONE 0
 #define SOF_JACK_SLOT_SPEAKER   1
 void SofSetJackCallback(ULONG Slot, SOF_JACK_CALLBACK Callback, PVOID Context);
+// Plain log line (for the PortCls side; does not touch CbsofJack)
+void SofTrace(const char* fmt, ...);
 
 // sofpcm.cpp: called from the WaveRT stream (PASSIVE_LEVEL except Position)
 NTSTATUS SofPcmOpen(PSOF_PCM Pcm, ULONG PcmId, BOOLEAN Capture, PMDL Mdl, ULONG BufferBytes,

@@ -58,6 +58,16 @@ static void JackLog(const char* fmt, ...)
     CbSetStatus(g_Cbsof, L"CbsofJack", line);   // latest jack status, never scrolls out
 }
 
+void SofTrace(const char* fmt, ...)
+{
+    CHAR line[200];
+    va_list args;
+    va_start(args, fmt);
+    RtlStringCbVPrintfA(line, sizeof(line), fmt, args);
+    va_end(args);
+    CbLog(g_Cbsof, "%s", line);
+}
+
 // Until the DA7219 has reported (or if it never does) both outputs count as
 // connected, so neither becomes unusable.
 BOOLEAN SofHeadphoneConnected(void)

@@ -62,6 +62,9 @@ Return Value:
         // Windows moves playback to the headphones and back (sofjack.cpp)
         SpeakerJackDescBridge.IsConnected = SofSpeakerConnected();
 
+        SofTrace("speaker jack read: description%s, connected %u",
+                 PropertyRequest->PropertyItem->Id == KSPROPERTY_JACK_DESCRIPTION2 ? "2" : "",
+                 (ULONG)SpeakerJackDescBridge.IsConnected);
         if (PropertyRequest->PropertyItem->Id == KSPROPERTY_JACK_DESCRIPTION)
         {
             ntStatus = pMiniport->PropertyHandlerJackDescription(
@@ -94,6 +97,7 @@ EventHandler_SpeakerJack
 {
     PAGED_CODE();
     PCMiniportTopology pMiniport = (PCMiniportTopology)EventRequest->MajorTarget;
+    SofTrace("%s jack event: verb %u", "speaker", (ULONG)EventRequest->Verb);
     if (EventRequest->Verb == PCEVENT_VERB_ADD) {
         pMiniport->AddEventToEventList(EventRequest->EventEntry);
     }
@@ -108,8 +112,8 @@ SpeakerJackChanged
     _In_ BOOLEAN Connected
 )
 {
-    UNREFERENCED_PARAMETER(Connected);
     PCMiniportTopology pMiniport = (PCMiniportTopology)Context;
+    SofTrace("raising speaker jack change (connected %u)", (ULONG)Connected);
     pMiniport->GenerateEventList(
         (GUID*)&KSEVENTSETID_PinCapsChange,
         KSEVENT_PINCAPS_JACKINFOCHANGE,

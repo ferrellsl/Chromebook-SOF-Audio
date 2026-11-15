@@ -61,6 +61,9 @@ Return Value:
         // cbsof: the live jack state from the DA7219 (sofjack.cpp)
         HeadphoneJackDescBridge.IsConnected = SofHeadphoneConnected();
 
+        SofTrace("headphone jack read: description%s, connected %u",
+                 PropertyRequest->PropertyItem->Id == KSPROPERTY_JACK_DESCRIPTION2 ? "2" : "",
+                 (ULONG)HeadphoneJackDescBridge.IsConnected);
         if (PropertyRequest->PropertyItem->Id == KSPROPERTY_JACK_DESCRIPTION)
         {
             ntStatus = pMiniport->PropertyHandlerJackDescription(
@@ -94,6 +97,7 @@ EventHandler_HeadphoneJack
 {
     PAGED_CODE();
     PCMiniportTopology pMiniport = (PCMiniportTopology)EventRequest->MajorTarget;
+    SofTrace("%s jack event: verb %u", "headphone", (ULONG)EventRequest->Verb);
     if (EventRequest->Verb == PCEVENT_VERB_ADD) {
         pMiniport->AddEventToEventList(EventRequest->EventEntry);
     }
@@ -111,8 +115,8 @@ HeadphoneJackChanged
     _In_ BOOLEAN Connected
 )
 {
-    UNREFERENCED_PARAMETER(Connected);
     PCMiniportTopology pMiniport = (PCMiniportTopology)Context;
+    SofTrace("raising headphone jack change (connected %u)", (ULONG)Connected);
     pMiniport->GenerateEventList(
         (GUID*)&KSEVENTSETID_PinCapsChange,
         KSEVENT_PINCAPS_JACKINFOCHANGE,
