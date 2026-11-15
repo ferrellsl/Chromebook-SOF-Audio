@@ -33,6 +33,7 @@ TKN_PCM_DMAC_CONFIG = 353
 TKN_DMIC_DRIVER_VERSION, TKN_DMIC_CLK_MIN, TKN_DMIC_CLK_MAX, TKN_DMIC_DUTY_MIN, TKN_DMIC_DUTY_MAX,     TKN_DMIC_NUM_PDM_ACTIVE, TKN_DMIC_SAMPLE_RATE, TKN_DMIC_FIFO_WORD_LENGTH, TKN_DMIC_UNMUTE_RAMP_TIME_MS =     600, 601, 602, 603, 604, 605, 608, 609, 610
 TKN_DMIC_PDM_TOKENS = (700, 701, 702, 703, 704, 705, 706)   # ctrl id, mic a/b enable, polarity a/b, clk edge, skew
 DMIC_NUM_CTRL = 4          # SOF_DAI_INTEL_DMIC_NUM_CTRL
+DMIC_MAX_PDMS = None       # --dmic-pdms
 TKN_SSP_CLKS_CONTROL, TKN_SSP_MCLK_ID, TKN_SSP_SAMPLE_BITS, TKN_SSP_FRAME_PULSE_WIDTH, \
     TKN_SSP_QUIRKS, TKN_SSP_TDM_PADDING, TKN_SSP_BCLK_DELAY = 500, 501, 502, 503, 504, 505, 506
 
@@ -172,7 +173,7 @@ def build(t, pipes):
     return msgs, pcms
 
 
-def dmic_config(link, hw, dai_index):
+def dmic_config(link, hw, dai_index, max_pdms=None):
     """Linux ipc3-topology.c sof_link_dmic_load: hdr.size = sizeof(struct
     sof_ipc_dai_config) with room for SOF_DAI_INTEL_DMIC_NUM_CTRL PDM controllers."""
     params = struct.pack("<I", 0)                                   # hdr
@@ -181,6 +182,10 @@ def dmic_config(link, hw, dai_index):
     params += struct.pack("<4H", tok_link(link, TKN_DMIC_FIFO_WORD_LENGTH, 0), 0,
                           tok_link(link, TKN_DMIC_DUTY_MIN, 0), tok_link(link, TKN_DMIC_DUTY_MAX, 0))
     num_pdm = tok_link(link, TKN_DMIC_NUM_PDM_ACTIVE, 0)
+    if max_pdms:
+        # e.g. Bobba: only PDM0 has mics; PDM1 returns a constant, which
+        # halves the level once Windows mixes the channels down.
+        num_pdm = min(num_pdm, max_pdms)
     params += struct.pack("<I3I5I", num_pdm, 0, 0, tok_link(link, TKN_DMIC_UNMUTE_RAMP_TIME_MS, 0), 0, 0, 0, 0, 0)
     assert len(params) == 68
     # PDM token sets: the i-th occurrence of each token belongs to controller i
@@ -193,6 +198,7 @@ def dmic_config(link, hw, dai_index):
             if i < num_pdm:
                 pdms[i][TKN_DMIC_PDM_TOKENS.index(x.token)] = x.value
     assert 1 <= num_pdm <= DMIC_NUM_CTRL and all(seen.get(t, 0) >= num_pdm for t in TKN_DMIC_PDM_TOKENS[:3])
+    assert all(pdms[i][0] == i for i in range(num_pdm))     # controller ids in order
     for pd in pdms:
         params += struct.pack("<I7H3H", 0, *pd, 0, 0, 0)
     size = 52 + len(params)
@@ -208,7 +214,7 @@ def dai_config(t, w, dai_type, dai_index):
         return None
     if dai_type == 2:
         hw = next((h for h in link.hw_configs if h.id == link.default_hw_config_id), link.hw_configs[0])
-        return dmic_config(link, hw, dai_index)
+        return dmic_config(link, hw, dai_index, DMIC_MAX_PDMS)
     if dai_type != 1:      # SSP and DMIC only
         return None
     hw = next((h for h in link.hw_configs if h.id == link.default_hw_config_id), link.hw_configs[0])
@@ -250,7 +256,10 @@ def main():
     ap.add_argument("out")
     ap.add_argument("--pipes", default="1")
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--dmic-pdms", type=int, default=None, help="use only the first N PDM controllers (2 mics each)")
     a = ap.parse_args()
+    global DMIC_MAX_PDMS
+    DMIC_MAX_PDMS = a.dmic_pdms
     pipes = {int(x) for x in a.pipes.split(",")}
     t = Topology(a.tplg)
     msgs, pcms = build(t, pipes)

@@ -4,7 +4,7 @@ cbsof: capture wave filters (built-in DMIC, headset mic).
 
 Derived from Microsoft SimpleAudioSample micarraywavtable.h (MS-PL). Each
 endpoint has exactly the format its SOF capture PCM delivers:
-  built-in mics  SOF PCM 99 (DMIC0, two PDM controllers) 4 ch, 48 kHz, 16-bit
+  built-in mics  SOF PCM 99 (DMIC0, PDM0 = two mics)     2 ch, 48 kHz, 16-bit
   headset mic    SOF PCM 1 capture (DA7219 on SSP2)      2 ch, 48 kHz, 16-bit
 --*/
 
@@ -13,7 +13,7 @@ endpoint has exactly the format its SOF capture PCM delivers:
 
 #define CBSOF_CAPTURE_RATE          48000
 #define CBSOF_CAPTURE_BITS          16
-#define DMIC_CHANNELS               4
+#define DMIC_CHANNELS               2
 #define MICIN_CHANNELS              2
 #define CBSOF_CAPTURE_MAX_STREAMS   1
 
@@ -128,8 +128,8 @@ static PCFILTER_DESCRIPTOR N##WaveMiniportFilterDescriptor =                    
     0, NULL                                                                                     \
 };
 
-// Built-in mics: 4 channels laid out as quad so Windows can downmix them.
-CBSOF_CAPTURE_WAVE(Dmic, DMIC_CHANNELS, KSAUDIO_SPEAKER_QUAD)
+// Built-in mics: the two mics on PDM0 as left/right.
+CBSOF_CAPTURE_WAVE(Dmic, DMIC_CHANNELS, KSAUDIO_SPEAKER_STEREO)
 // Headset mic: the DA7219 sends the mic on the left I2S slot.
 CBSOF_CAPTURE_WAVE(MicIn, MICIN_CHANNELS, KSAUDIO_SPEAKER_STEREO)
 

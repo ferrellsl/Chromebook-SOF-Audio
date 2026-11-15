@@ -94,8 +94,8 @@ EventHandler_SpeakerJack
 {
     PAGED_CODE();
     PCMiniportTopology pMiniport = (PCMiniportTopology)EventRequest->MajorTarget;
-    SofTrace("%s jack event: verb %u", "speaker", (ULONG)EventRequest->Verb);
     if (EventRequest->Verb == PCEVENT_VERB_ADD) {
+        SofTrace("%s jack event subscribed", "speaker");
         pMiniport->AddEventToEventList(EventRequest->EventEntry);
     }
     return STATUS_SUCCESS;

@@ -70,7 +70,7 @@ CBSOF_CAPTURE_TOPO(MicIn, &KSNODETYPE_HEADSET_MICROPHONE)
 // Only the mic elements pin has one.
 static KSJACK_DESCRIPTION DmicJackDesc =
 {
-    KSAUDIO_SPEAKER_QUAD,
+    KSAUDIO_SPEAKER_STEREO,
     0,
     eConnTypeUnknown,
     eGeoLocFront,

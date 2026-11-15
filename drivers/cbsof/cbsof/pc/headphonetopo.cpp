@@ -94,8 +94,8 @@ EventHandler_HeadphoneJack
 {
     PAGED_CODE();
     PCMiniportTopology pMiniport = (PCMiniportTopology)EventRequest->MajorTarget;
-    SofTrace("%s jack event: verb %u", "headphone", (ULONG)EventRequest->Verb);
     if (EventRequest->Verb == PCEVENT_VERB_ADD) {
+        SofTrace("%s jack event subscribed", "headphone");
         pMiniport->AddEventToEventList(EventRequest->EventEntry);
     }
     // PCEVENT_VERB_REMOVE / SUPPORT: nothing to do

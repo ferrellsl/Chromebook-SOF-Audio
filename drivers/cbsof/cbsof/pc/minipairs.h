@@ -104,7 +104,7 @@ ENDPOINT_MINIPAIR SpeakerMiniports =
 /*********************************************************************
 * cbsof: capture endpoints. Topo (mic elements -> bridge) feeds Wave  *
 * (bridge -> host pin):                                               *
-*   Microphone          built-in DMIC, SOF PCM 99, 4 ch              *
+*   Microphone          built-in DMIC, SOF PCM 99, 2 ch (PDM0)       *
 *   Headset Microphone  DA7219 on SSP2, SOF PCM 1 capture, 2 ch      *
 *********************************************************************/
 static

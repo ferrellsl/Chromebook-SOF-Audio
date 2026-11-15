@@ -320,9 +320,9 @@ NTSTATUS SofPcmOpen(PSOF_PCM Pcm, ULONG PcmId, BOOLEAN Capture, PMDL Mdl, ULONG 
         CbLog(ctx, "SofPcmOpen: no %s pipeline for PCM %u", Capture ? "capture" : "playback", PcmId);
         return STATUS_NOT_SUPPORTED;
     }
-    // The topology's PCMs are 48 kHz; DMIC capture is 4 channels, the rest stereo.
+    // All PCMs are 48 kHz stereo (DMIC: PDM0's two mics only, see dmic.cbtp)
     if (!Mdl || BufferBytes == 0 || (BufferBytes & (PAGE_SIZE - 1)) ||
-        BitsPerSample != 16 || Channels != (PcmId == SOF_PCM_DMIC ? 4u : 2u) || Rate != 48000) {
+        BitsPerSample != 16 || Channels != 2 || Rate != 48000) {
         CbLog(ctx, "SofPcmOpen: unsupported buffer/format (%u bytes, %u ch, %u Hz, %u bits)",
               BufferBytes, Channels, Rate, BitsPerSample);
         return STATUS_INVALID_PARAMETER;
