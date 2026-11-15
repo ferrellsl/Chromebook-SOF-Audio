@@ -126,6 +126,9 @@ typedef struct _CBSOF_CONTEXT {
     UINT32 SpeakerHostComp;
 
     BOOLEAN DspRunning;
+    BOOLEAN GuardTripped;   // previous power-up crashed; DSP stays off
+    ULONG Instance;     // changes on every SofDeviceStart (bus resources may be new)
+    ULONG BootId;       // changes on every successful DSP boot (pipelines are new)
 
     // Bring-up log, copied to the registry so it can be read without a debugger
     KSPIN_LOCK LogLock;

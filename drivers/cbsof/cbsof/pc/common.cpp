@@ -2102,6 +2102,10 @@ CAdapterCommon::Cleanup()
     PAGED_CODE();
     DPF_ENTER(("[CAdapterCommon::Cleanup]"));
     EmptySubdeviceCache();
+
+    // cbsof: stop/remove/surprise removal. Release the DSP now: this adapter
+    // object can outlive the bus's hardware resources (0.4 crash).
+    SofDeviceStop();
 }
 
 //=============================================================================

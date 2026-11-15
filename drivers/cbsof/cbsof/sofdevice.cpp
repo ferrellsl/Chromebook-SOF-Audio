@@ -6,6 +6,7 @@
 extern "C" NTSTATUS PcGetPhysicalDeviceObject(PDEVICE_OBJECT DeviceObject, PDEVICE_OBJECT* PhysicalDeviceObject);
 
 PCBSOF_CONTEXT g_Cbsof = NULL;
+static volatile LONG g_InstanceCounter = 0;
 
 // ---------------------------------------------------------------------------
 // Logging: DbgPrint plus an in-memory log written to the device's hardware
@@ -110,6 +111,93 @@ static NTSTATUS QueryAdspInterface(PDEVICE_OBJECT pdo, PADSP_BUS_INTERFACE iface
 }
 
 // ---------------------------------------------------------------------------
+// The bus driver maps its BARs in PrepareHardware and unmaps them in
+// ReleaseHardware, and its re-init clears the DSP interrupt callback. Never
+// trust cached pointers across power transitions: fetch them again and
+// re-register on every power-up. (0.4 crashed by reading a stale BAR4.)
+// ---------------------------------------------------------------------------
+static NTSTATUS RefreshBusResources(PCBSOF_CONTEXT ctx)
+{
+    CB_PCI_BAR hdaBar = {}, dspBar = {};
+    PVOID ppcap = NULL;
+    NHLT_INFO nhlt = {};
+    BUS_INTERFACE_STANDARD pci = {};
+    NTSTATUS status = ctx->Bus.GetResources(ctx->Bus.Context, &hdaBar, &dspBar, &ppcap, &nhlt, &pci);
+    if (!NT_SUCCESS(status)) {
+        CbLog(ctx, "GetResources failed 0x%08X", status);
+        return status;
+    }
+    if (!hdaBar.Base || !dspBar.Base || dspBar.Len < DSP_MBOX_UPLINK_OFFSET + 0x1000 || !ppcap) {
+        CbLog(ctx, "DSP BAR or PPCAP missing (HDA %p, DSP %p len 0x%X, PPCAP %p)",
+              hdaBar.Base, dspBar.Base, dspBar.Len, ppcap);
+        ctx->DspBar = NULL;
+        ctx->HdaBar = NULL;
+        ctx->PpCap = NULL;
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+    if (ctx->DspBar && (PUCHAR)dspBar.Base != ctx->DspBar) {
+        CbLog(ctx, "bus resources changed: DSP BAR %p -> %p", ctx->DspBar, dspBar.Base);
+    }
+    ctx->HdaBar = (PUCHAR)hdaBar.Base;
+    ctx->HdaBarLen = hdaBar.Len;
+    ctx->DspBar = (PUCHAR)dspBar.Base;
+    ctx->DspBarLen = dspBar.Len;
+    ctx->PpCap = (PUCHAR)ppcap;
+
+    // Re-register every time; the bus forgets the callback when it re-inits.
+    status = ctx->Bus.RegisterInterrupt(ctx->Bus.Context, DspInterruptCallback, ctx);
+    if (!NT_SUCCESS(status)) {
+        CbLog(ctx, "RegisterInterrupt failed 0x%08X", status);
+        return status;
+    }
+    ctx->InterruptRegistered = TRUE;
+    return STATUS_SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
+// Crash guard: "CbsofPowerUpPending" (REG_DWORD, device hardware key) is set
+// while a DSP power-up is in progress. If it is still set when we start, the
+// last power-up crashed the machine, so leave the DSP off instead of boot
+// looping. Delete the value (or reinstall) to try again.
+// ---------------------------------------------------------------------------
+static ULONG GuardRead(PCBSOF_CONTEXT ctx)
+{
+    HANDLE key;
+    ULONG value = 0;
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(ctx->Pdo, PLUGPLAY_REGKEY_DEVICE, KEY_READ, &key))) {
+        return 0;
+    }
+    UNICODE_STRING name;
+    RtlInitUnicodeString(&name, L"CbsofPowerUpPending");
+    UCHAR buf[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
+    ULONG len = 0;
+    if (NT_SUCCESS(ZwQueryValueKey(key, &name, KeyValuePartialInformation, buf, sizeof(buf), &len))) {
+        PKEY_VALUE_PARTIAL_INFORMATION info = (PKEY_VALUE_PARTIAL_INFORMATION)buf;
+        if (info->Type == REG_DWORD && info->DataLength == sizeof(ULONG)) {
+            value = *(PULONG)info->Data;
+        }
+    }
+    ZwClose(key);
+    return value;
+}
+
+static void GuardWrite(PCBSOF_CONTEXT ctx, ULONG value)
+{
+    HANDLE key;
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(ctx->Pdo, PLUGPLAY_REGKEY_DEVICE, KEY_WRITE, &key))) {
+        return;
+    }
+    UNICODE_STRING name;
+    RtlInitUnicodeString(&name, L"CbsofPowerUpPending");
+    if (value) {
+        ZwSetValueKey(key, &name, 0, REG_DWORD, &value, sizeof(value));
+    } else {
+        ZwDeleteValueKey(key, &name);
+    }
+    ZwFlushKey(key);    // must reach disk before we touch the hardware
+    ZwClose(key);
+}
+
 NTSTATUS SofDevicePowerUp(void)
 {
     PCBSOF_CONTEXT ctx = g_Cbsof;
@@ -119,9 +207,27 @@ NTSTATUS SofDevicePowerUp(void)
     if (ctx->DspRunning) {
         return STATUS_SUCCESS;
     }
+    if (ctx->GuardTripped) {
+        return STATUS_DEVICE_NOT_READY;
+    }
+    if (GuardRead(ctx)) {
+        ctx->GuardTripped = TRUE;
+        CbLog(ctx, "the previous DSP power-up did not finish (crash?). DSP left off to avoid a boot loop.");
+        CbLog(ctx, "Delete the CbsofPowerUpPending value (install-on-chromebook.ps1 -ClearGuard) to try again.");
+        CbFlushLog(ctx);
+        return STATUS_DEVICE_NOT_READY;
+    }
+    GuardWrite(ctx, 1);
 
     NTSTATUS status = ctx->Bus.SetDSPPowerState(ctx->Bus.Context, PowerDeviceD0);
     CbLog(ctx, "SetDSPPowerState(D0) 0x%08X", status);
+
+    status = RefreshBusResources(ctx);
+    if (!NT_SUCCESS(status)) {
+        GuardWrite(ctx, 0);
+        CbFlushLog(ctx);
+        return status;
+    }
 
     status = DspBoot(ctx);
     CbLog(ctx, "DspBoot result 0x%08X", status);
@@ -133,6 +239,10 @@ NTSTATUS SofDevicePowerUp(void)
         status = SofLoadTopology(ctx);
     }
     ctx->DspRunning = NT_SUCCESS(status);
+    if (ctx->DspRunning) {
+        ctx->BootId++;
+    }
+    GuardWrite(ctx, 0);     // we survived the hardware access
     CbFlushLog(ctx);
     return status;
 }
@@ -143,12 +253,23 @@ void SofDevicePowerDown(void)
     if (!ctx || !ctx->BusValid) {
         return;
     }
-    DspShutdown(ctx);
+    if (ctx->DspBar) {
+        DspShutdown(ctx);
+    }
+    if (ctx->InterruptRegistered) {
+        ctx->Bus.UnregisterInterrupt(ctx->Bus.Context);
+        ctx->InterruptRegistered = FALSE;
+        KeFlushQueuedDpcs();
+    }
     if (ctx->DspRunning) {
         ctx->Bus.SetDSPPowerState(ctx->Bus.Context, PowerDeviceD3);
     }
     ctx->DspRunning = FALSE;
     ctx->TopologyLoaded = FALSE;
+    // Forget the mappings: the bus may unmap them while we are down.
+    ctx->DspBar = NULL;
+    ctx->HdaBar = NULL;
+    ctx->PpCap = NULL;
     CbLog(ctx, "DSP powered down");
     CbFlushLog(ctx);
 }
@@ -170,7 +291,7 @@ NTSTATUS SofDeviceStart(PDEVICE_OBJECT Fdo)
     ctx->Fdo = Fdo;
     g_Cbsof = ctx;
 
-    CbLog(ctx, "cbsof 0.4 (PortCls): starting");
+    CbLog(ctx, "cbsof 0.4.1 (PortCls): starting");
 
     NTSTATUS status = PcGetPhysicalDeviceObject(Fdo, &ctx->Pdo);
     if (!NT_SUCCESS(status)) {
@@ -193,34 +314,7 @@ NTSTATUS SofDeviceStart(PDEVICE_OBJECT Fdo)
         return STATUS_NOT_SUPPORTED;
     }
 
-    CB_PCI_BAR hdaBar = {}, dspBar = {};
-    PVOID ppcap = NULL;
-    NHLT_INFO nhlt = {};
-    BUS_INTERFACE_STANDARD pci = {};
-    status = ctx->Bus.GetResources(ctx->Bus.Context, &hdaBar, &dspBar, &ppcap, &nhlt, &pci);
-    if (!NT_SUCCESS(status)) {
-        CbLog(ctx, "GetResources failed 0x%08X", status);
-        CbFlushLog(ctx);
-        return status;
-    }
-    ctx->HdaBar = (PUCHAR)hdaBar.Base;
-    ctx->HdaBarLen = hdaBar.Len;
-    ctx->DspBar = (PUCHAR)dspBar.Base;
-    ctx->DspBarLen = dspBar.Len;
-    ctx->PpCap = (PUCHAR)ppcap;
-    if (!ctx->HdaBar || !ctx->DspBar || ctx->DspBarLen < DSP_MBOX_UPLINK_OFFSET + 0x1000 || !ctx->PpCap) {
-        CbLog(ctx, "DSP BAR or PPCAP missing");
-        CbFlushLog(ctx);
-        return STATUS_DEVICE_CONFIGURATION_ERROR;
-    }
-
-    status = ctx->Bus.RegisterInterrupt(ctx->Bus.Context, DspInterruptCallback, ctx);
-    if (!NT_SUCCESS(status)) {
-        CbLog(ctx, "RegisterInterrupt failed 0x%08X", status);
-        CbFlushLog(ctx);
-        return status;
-    }
-    ctx->InterruptRegistered = TRUE;
+    ctx->Instance = (ULONG)InterlockedIncrement(&g_InstanceCounter);
 
     CsAudioOpen(ctx);
 
@@ -236,13 +330,9 @@ void SofDeviceStop(void)
     if (!ctx) {
         return;
     }
+    CbLog(ctx, "device stopping");
     SofDevicePowerDown();
     CsAudioClose(ctx);
-    if (ctx->InterruptRegistered) {
-        ctx->Bus.UnregisterInterrupt(ctx->Bus.Context);
-        ctx->InterruptRegistered = FALSE;
-        KeFlushQueuedDpcs();
-    }
     if (ctx->BusValid && ctx->Bus.InterfaceDereference) {
         ctx->Bus.InterfaceDereference(ctx->Bus.Context);
     }

@@ -11,6 +11,11 @@ typedef struct _CBSOF_CONTEXT CBSOF_CONTEXT, *PCBSOF_CONTEXT;
 
 // One host stream through a SOF pipeline.
 typedef struct _SOF_PCM {
+    ULONG Instance;         // DSP instance the HDA stream belongs to
+    ULONG BootId;           // DSP boot the PCM_PARAMS were sent to
+    ULONG Channels;
+    ULONG Rate;
+    ULONG BitsPerSample;
     ULONG PcmId;
     BOOLEAN Capture;
     UINT32 HostComp;

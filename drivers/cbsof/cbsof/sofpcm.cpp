@@ -227,6 +227,48 @@ static NTSTATUS SendStreamCmd(PCBSOF_CONTEXT ctx, PSOF_PCM pcm, ULONG cmd, const
     return IpcTxCheck(ctx, &msg, sizeof(msg), what);
 }
 
+// A PCM belongs to one DSP instance; after a stop/restart of the device its
+// HDA stream handle points into the old bus state and must not be used.
+static BOOLEAN PcmUsable(PCBSOF_CONTEXT ctx, PSOF_PCM pcm)
+{
+    return ctx != NULL && pcm->Instance != 0 && pcm->Instance == ctx->Instance;
+}
+
+// STREAM_PCM_PARAMS for an already prepared HDA stream (also after a DSP reboot)
+static NTSTATUS SendPcmParams(PCBSOF_CONTEXT ctx, PSOF_PCM Pcm)
+{
+    sof_ipc_pcm_params pcm;
+    ULONG bytesPerSample = Pcm->BitsPerSample / 8;
+
+    ApplyProcenFormatQuirk(ctx, Pcm->StreamTag, !Pcm->Capture);
+
+    RtlZeroMemory(&pcm, sizeof(pcm));
+    pcm.hdr.size = sizeof(pcm);
+    pcm.hdr.cmd = SOF_IPC_GLB_STREAM_MSG | SOF_IPC_STREAM_PCM_PARAMS;
+    pcm.comp_id = Pcm->HostComp;
+    pcm.params.hdr.size = sizeof(pcm.params);
+    pcm.params.buffer.hdr.size = sizeof(pcm.params.buffer);
+    pcm.params.buffer.phy_addr = Pcm->PageTablePhys.LowPart;
+    pcm.params.buffer.pages = Pcm->BufferBytes / PAGE_SIZE;
+    pcm.params.buffer.size = Pcm->BufferBytes;
+    pcm.params.direction = Pcm->Capture ? 1 : 0;
+    pcm.params.frame_fmt = 0;            // S16_LE
+    pcm.params.buffer_fmt = 0;           // interleaved
+    pcm.params.rate = Pcm->Rate;
+    pcm.params.stream_tag = Pcm->StreamTag;
+    pcm.params.channels = (UINT16)Pcm->Channels;
+    pcm.params.sample_valid_bytes = (UINT16)bytesPerSample;
+    pcm.params.sample_container_bytes = (UINT16)bytesPerSample;
+    pcm.params.host_period_bytes = min(Pcm->BufferBytes / 2, Pcm->Rate / 100 * Pcm->Channels * bytesPerSample);
+    pcm.params.no_stream_position = 1;   // HDA: positions from DPIB
+    NTSTATUS status = IpcTxCheck(ctx, &pcm, sizeof(pcm), "PCM_PARAMS");
+    if (NT_SUCCESS(status)) {
+        Pcm->ParamsSet = TRUE;
+        Pcm->BootId = ctx->BootId;
+    }
+    return status;
+}
+
 NTSTATUS SofPcmOpen(PSOF_PCM Pcm, ULONG PcmId, BOOLEAN Capture, PMDL Mdl, ULONG BufferBytes,
                     ULONG Channels, ULONG Rate, ULONG BitsPerSample)
 {
@@ -235,7 +277,6 @@ NTSTATUS SofPcmOpen(PSOF_PCM Pcm, ULONG PcmId, BOOLEAN Capture, PMDL Mdl, ULONG 
     PHYSICAL_ADDRESS low = {}, high = {}, boundary = {};
     PVOID bdlVa = NULL;
     HDAUDIO_STREAM_FORMAT fmt = {};
-    sof_ipc_pcm_params pcm;
     ULONG pages;
     PPFN_NUMBER pfns;
 
@@ -246,6 +287,7 @@ NTSTATUS SofPcmOpen(PSOF_PCM Pcm, ULONG PcmId, BOOLEAN Capture, PMDL Mdl, ULONG 
     if (!ctx || !ctx->DspRunning || !ctx->TopologyLoaded) {
         return STATUS_DEVICE_NOT_READY;
     }
+    Pcm->Instance = ctx->Instance;
     if (Capture || PcmId != SOF_PCM_SPEAKERS) {
         return STATUS_NOT_SUPPORTED;     // only the speaker pipeline exists so far
     }
@@ -309,32 +351,15 @@ NTSTATUS SofPcmOpen(PSOF_PCM Pcm, ULONG PcmId, BOOLEAN Capture, PMDL Mdl, ULONG 
         }
         KeMemoryBarrier();
     }
-    ApplyProcenFormatQuirk(ctx, Pcm->StreamTag, !Capture);
 
-    RtlZeroMemory(&pcm, sizeof(pcm));
-    pcm.hdr.size = sizeof(pcm);
-    pcm.hdr.cmd = SOF_IPC_GLB_STREAM_MSG | SOF_IPC_STREAM_PCM_PARAMS;
-    pcm.comp_id = Pcm->HostComp;
-    pcm.params.hdr.size = sizeof(pcm.params);
-    pcm.params.buffer.hdr.size = sizeof(pcm.params.buffer);
-    pcm.params.buffer.phy_addr = Pcm->PageTablePhys.LowPart;
-    pcm.params.buffer.pages = pages;
-    pcm.params.buffer.size = BufferBytes;
-    pcm.params.direction = Capture ? 1 : 0;
-    pcm.params.frame_fmt = 0;            // S16_LE
-    pcm.params.buffer_fmt = 0;           // interleaved
-    pcm.params.rate = Rate;
-    pcm.params.stream_tag = Pcm->StreamTag;
-    pcm.params.channels = (UINT16)Channels;
-    pcm.params.sample_valid_bytes = (UINT16)(BitsPerSample / 8);
-    pcm.params.sample_container_bytes = (UINT16)(BitsPerSample / 8);
-    pcm.params.host_period_bytes = min(BufferBytes / 2, (ULONG)(Rate / 100 * Channels * (BitsPerSample / 8)));
-    pcm.params.no_stream_position = 1;   // HDA: positions from DPIB
-    status = IpcTxCheck(ctx, &pcm, sizeof(pcm), "PCM_PARAMS");
+    Pcm->Channels = Channels;
+    Pcm->Rate = Rate;
+    Pcm->BitsPerSample = BitsPerSample;
+
+    status = SendPcmParams(ctx, Pcm);
     if (!NT_SUCCESS(status)) {
         goto fail;
     }
-    Pcm->ParamsSet = TRUE;
     CbLog(ctx, "PCM %u open: %u bytes (%u pages), tag %u", PcmId, BufferBytes, pages, Pcm->StreamTag);
     return STATUS_SUCCESS;
 
@@ -346,11 +371,21 @@ fail:
 NTSTATUS SofPcmRun(PSOF_PCM Pcm)
 {
     PCBSOF_CONTEXT ctx = g_Cbsof;
-    if (!ctx || !Pcm->ParamsSet) {
+    if (!PcmUsable(ctx, Pcm) || !ctx->DspRunning || !Pcm->ParamsSet) {
         return STATUS_DEVICE_NOT_READY;
     }
     if (Pcm->DmaRunning) {
         return STATUS_SUCCESS;
+    }
+    if (Pcm->BootId != ctx->BootId) {
+        // The DSP was power-cycled while this stream was paused: its pipeline
+        // state is gone, so set the stream up again before starting it.
+        CbLog(ctx, "PCM %u: DSP rebooted, re-sending PCM_PARAMS", Pcm->PcmId);
+        Pcm->Started = FALSE;
+        NTSTATUS st = SendPcmParams(ctx, Pcm);
+        if (!NT_SUCCESS(st)) {
+            return st;
+        }
     }
     if (!Pcm->AmpOn) {
         CsAudioNotify(ctx, CSAudioEndpointTypeSpeaker, CSAudioEndpointStart);
@@ -372,11 +407,13 @@ NTSTATUS SofPcmRun(PSOF_PCM Pcm)
 NTSTATUS SofPcmPause(PSOF_PCM Pcm)
 {
     PCBSOF_CONTEXT ctx = g_Cbsof;
-    if (!ctx || !Pcm->DmaRunning) {
+    if (!PcmUsable(ctx, Pcm) || !Pcm->DmaRunning) {
         return STATUS_SUCCESS;
     }
     // Pause: firmware first, then host DMA
-    NTSTATUS status = SendStreamCmd(ctx, Pcm, SOF_IPC_STREAM_TRIG_PAUSE, "TRIG_PAUSE");
+    NTSTATUS status = (ctx->DspRunning && Pcm->BootId == ctx->BootId)
+        ? SendStreamCmd(ctx, Pcm, SOF_IPC_STREAM_TRIG_PAUSE, "TRIG_PAUSE")
+        : STATUS_SUCCESS;
     ctx->Bus.TriggerDSP(ctx->Bus.Context, Pcm->Stream, FALSE);
     Pcm->DmaRunning = FALSE;
     Pcm->Paused = TRUE;
@@ -390,10 +427,19 @@ NTSTATUS SofPcmPause(PSOF_PCM Pcm)
 void SofPcmClose(PSOF_PCM Pcm)
 {
     PCBSOF_CONTEXT ctx = g_Cbsof;
-    if (!ctx) {
+    if (!PcmUsable(ctx, Pcm)) {
+        // The DSP instance this stream belonged to is gone: never touch the
+        // old HDA stream. Only free our own memory.
+        if (Pcm->PageTable) {
+            MmFreeContiguousMemorySpecifyCache(Pcm->PageTable, PAGE_SIZE, MmNonCached);
+            Pcm->PageTable = NULL;
+        }
+        Pcm->Stream = NULL;
+        Pcm->ParamsSet = Pcm->Started = Pcm->DmaRunning = Pcm->AmpOn = FALSE;
         return;
     }
-    if (Pcm->Started && ctx->DspRunning) {
+    BOOLEAN fwHasStream = ctx->DspRunning && Pcm->BootId == ctx->BootId;
+    if (Pcm->Started && fwHasStream) {
         SendStreamCmd(ctx, Pcm, SOF_IPC_STREAM_TRIG_STOP, "TRIG_STOP");
     }
     if (Pcm->DmaRunning) {
@@ -404,7 +450,7 @@ void SofPcmClose(PSOF_PCM Pcm)
         CsAudioNotify(ctx, CSAudioEndpointTypeSpeaker, CSAudioEndpointStop);
         Pcm->AmpOn = FALSE;
     }
-    if (Pcm->ParamsSet && ctx->DspRunning) {
+    if (Pcm->ParamsSet && fwHasStream) {
         SendStreamCmd(ctx, Pcm, SOF_IPC_STREAM_PCM_FREE, "PCM_FREE");
     }
     Pcm->ParamsSet = FALSE;
@@ -423,7 +469,7 @@ void SofPcmClose(PSOF_PCM Pcm)
 ULONG SofPcmPosition(PSOF_PCM Pcm)
 {
     PCBSOF_CONTEXT ctx = g_Cbsof;
-    if (!ctx || !Pcm->Stream || !Pcm->BufferBytes) {
+    if (!PcmUsable(ctx, Pcm) || !Pcm->Stream || !Pcm->BufferBytes) {
         return 0;
     }
     return ctx->Bus.StreamPosition(ctx->Bus.Context, Pcm->Stream) % Pcm->BufferBytes;
