@@ -18,9 +18,11 @@ with a Celeron N4020, DA7219 headset codec and MAX98357A speaker amp.
 
 ## Status
 
-Milestone 3 **works on hardware** (Bobba, 2026-11-14): `cbsof.sys` boots the
-SOF 2.2.0 firmware, loads the speaker pipeline and plays a test tone through
-the MAX98357A speakers. It has no Windows audio endpoints yet (milestone 4). It writes its log to the
+Milestone 4a **works on hardware** (Bobba, build 0.4.5, 2026-11-14): `cbsof.sys`
+is a PortCls audio driver with a Windows **Speakers** endpoint on the SOF
+speaker pipeline. YouTube playback is clean in stereo; pause/resume and the
+volume slider work; the DSP powers down when idle and reboots on the next
+sound. Headphones (DA7219, jack detection) and microphones come next. It writes its log to the
 registry:
 
 ```powershell

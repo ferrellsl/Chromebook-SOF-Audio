@@ -82,6 +82,18 @@ The closed binary is never disassembled, patched or copied. Allowed sources:
    the driver replays them, sets up HDA host DMA + PCM_PARAMS, powers the
    MAX98357A via the CsAudio callback API, and a 469 Hz tone was heard.
 4. PortCls WaveRT endpoints: Speakers, Headphones, Mic Array, Mic, with jack switching.
+   **4a (Speakers) done 2026-11-14, build 0.4.5**: clean stereo YouTube playback,
+   pause/resume, volume. Lessons from the crash-filled path to it:
+   - sklhdaudbus can hand out unmapped BARs/PPCAP after it restarts or when it
+     refuses D0 (`SetDSPPowerState(D0)` = 0xC00002D3): re-fetch on every
+     power-up, check with MmIsAddressValid, walk PPCAP ourselves.
+   - Letting the bus idle made its own power-up fail and remove its children:
+     hold it in D0 for the device's lifetime.
+   - Every cbsof package must run from its own driver-store folder (DIRID 13);
+     purge old packages with the DSP device disabled, then re-enable before
+     `devcon update`.
+   - Crash guard (`CbsofPowerUpPending`) + timestamped log saved per line +
+     `CbsofLogPrevious` make a crashed boot diagnosable without a debugger.
 5. D3 / sleep / resume, polish, installer.
 
 Test machine: one Bobba in test-signing mode (Secure Boot off).
