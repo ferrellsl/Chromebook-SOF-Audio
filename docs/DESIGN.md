@@ -73,7 +73,10 @@ The closed binary is never disassembled, patched or copied. Allowed sources:
 1. Toolchain: build sklhdaudbus, da7219, max98357a unchanged and install them on
    the test machine.
 2. `cbsof.sys` binds to the CSAUDIO device, maps BARs, boots the DSP and gets
-   FW_READY. Logged with WPP/DbgPrint.
+   FW_READY. **Done 2026-11-14 on Bobba (touch)**: ROM init on the first
+   attempt, SOF 2.2.0 / ABI 3.22.1, IRQ-driven FW_READY, PM_CTX_SIZE round
+   trip with error 0. Mailbox windows come from the .ri extended manifest
+   (host->dsp 0xA0000, dsp->host 0x81000, stream 0xC1000).
 3. Topology loaded, speakers play a tone.
 4. PortCls WaveRT endpoints: Speakers, Headphones, Mic Array, Mic, with jack switching.
 5. D3 / sleep / resume, polish, installer.
