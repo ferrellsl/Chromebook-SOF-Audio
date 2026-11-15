@@ -129,6 +129,7 @@ typedef struct _CBSOF_CONTEXT {
 
     BOOLEAN DspRunning;
     BOOLEAN GuardTripped;   // previous power-up crashed; DSP stays off
+    BOOLEAN BusHeldD0;      // we hold sklhdaudbus in D0 (SetDSPPowerState(D0) done)
     ULONG Instance;     // changes on every SofDeviceStart (bus resources may be new)
     ULONG BootId;       // changes on every successful DSP boot (pipelines are new)
 

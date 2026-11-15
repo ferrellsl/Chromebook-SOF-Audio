@@ -333,8 +333,20 @@ NTSTATUS SofDevicePowerUp(void)
     }
     GuardWrite(ctx, 1);
 
-    NTSTATUS status = ctx->Bus.SetDSPPowerState(ctx->Bus.Context, PowerDeviceD0);
-    CbLog(ctx, "SetDSPPowerState(D0) 0x%08X", status);
+    // Hold the bus in D0 for as long as this device exists (released only in
+    // SofDeviceStop). Letting it idle made its next power-up fail
+    // (0xC00002D3) and take our device down with it.
+    NTSTATUS status = STATUS_SUCCESS;
+    if (!ctx->BusHeldD0) {
+        status = ctx->Bus.SetDSPPowerState(ctx->Bus.Context, PowerDeviceD0);
+        CbLog(ctx, "bus held in D0: 0x%08X", status);
+        if (!NT_SUCCESS(status)) {
+            CbLog(ctx, "the bus refused to power up; DSP left off without touching the hardware");
+            GuardWrite(ctx, 0);
+            return status;
+        }
+        ctx->BusHeldD0 = TRUE;
+    }
 
     status = RefreshBusResources(ctx);
     if (!NT_SUCCESS(status)) {
@@ -380,9 +392,7 @@ void SofDevicePowerDown(void)
         ctx->InterruptRegistered = FALSE;
         KeFlushQueuedDpcs();
     }
-    if (ctx->DspRunning) {
-        ctx->Bus.SetDSPPowerState(ctx->Bus.Context, PowerDeviceD3);
-    }
+    // The bus stays in D0 (see SofDevicePowerUp); only SofDeviceStop releases it.
     ctx->DspRunning = FALSE;
     ctx->TopologyLoaded = FALSE;
     // Forget the mappings: the bus may unmap them while we are down.
@@ -410,7 +420,7 @@ NTSTATUS SofDeviceStart(PDEVICE_OBJECT Fdo)
     ctx->Fdo = Fdo;
     g_Cbsof = ctx;
 
-    CbLog(ctx, "cbsof 0.4.4 (PortCls): starting");
+    CbLog(ctx, "cbsof 0.4.5 (PortCls): starting");
 
     NTSTATUS status = PcGetPhysicalDeviceObject(Fdo, &ctx->Pdo);
     if (!NT_SUCCESS(status)) {
@@ -453,6 +463,10 @@ void SofDeviceStop(void)
     }
     CbLog(ctx, "device stopping");
     SofDevicePowerDown();
+    if (ctx->BusHeldD0 && ctx->BusValid) {
+        ctx->Bus.SetDSPPowerState(ctx->Bus.Context, PowerDeviceD3);    // let the bus idle again
+        ctx->BusHeldD0 = FALSE;
+    }
     CsAudioClose(ctx);
     if (ctx->BusValid && ctx->Bus.InterfaceDereference) {
         ctx->Bus.InterfaceDereference(ctx->Bus.Context);
