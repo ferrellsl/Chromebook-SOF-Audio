@@ -9,7 +9,7 @@ Signature   = "$Windows NT$"
 Class       = MEDIA
 ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
 Provider    = %ProviderName%
-DriverVer   = 11/14/2026,0.4.1.0
+DriverVer   = 11/14/2026,0.4.2.0
 CatalogFile = cbsof.cat
 PnpLockdown = 1
 
@@ -36,8 +36,12 @@ PETrust = true
 [CBSOF.NT$ARCH$.10.0...16299]
 %CBSOF.DeviceDesc% = CBSOF_SA, CSAUDIO\ADSP&CTLR_VEN_8086&CTLR_DEV_3198
 
+; cbsof.sys runs from this package's own driver-store folder (DIRID 13), so an
+; older cbsof package can never overwrite the binary of a newer one (that is
+; how 0.4 kept loading after 0.4.1 was installed). The firmware files are the
+; same in every version and stay in System32\drivers\cbsof.
 [DestinationDirs]
-CBSOF_SA.CopyList = 12
+CBSOF_SA.CopyList = 13
 CBSOF_SA.FwList   = 12,cbsof
 
 [CBSOF_SA.CopyList]
@@ -93,7 +97,7 @@ DisplayName   = %CBSOF.SvcDesc%
 ServiceType   = 1
 StartType     = 3
 ErrorControl  = 1
-ServiceBinary = %12%\cbsof.sys
+ServiceBinary = %13%\cbsof.sys
 
 [CBSOF_SA.NT.HW]
 AddReg = AUDIOHW.AddReg

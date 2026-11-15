@@ -30,6 +30,17 @@ function Show-Log {
         }
     }
     Get-PnpDevice | Where-Object { $_.InstanceId -like "CSAUDIO\ADSP*" } | Format-Table Status, FriendlyName, InstanceId -AutoSize
+
+    # Which cbsof.sys the service actually loads
+    $svc = Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\cbsof" -ErrorAction SilentlyContinue
+    if ($svc) {
+        $path = $svc.ImagePath -replace '^\\SystemRoot', $env:SystemRoot -replace '^System32', "$env:SystemRoot\System32" -replace '^\\\?\?\\', ''
+        "cbsof service: Start=$($svc.Start) ImagePath=$($svc.ImagePath)"
+        if (Test-Path $path) {
+            $f = Get-Item $path
+            "loaded binary: $($f.FullName)  $($f.Length) bytes  $($f.LastWriteTime)"
+        }
+    }
 }
 
 function Clear-Guard {
@@ -85,17 +96,22 @@ Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\Root | O
 Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
 
 Clear-Guard
-$old = @(Get-CbsofPackages)
+
+# Remove every older cbsof package first, so Windows can never fall back to
+# one of them, plus the pre-0.4.2 binary in System32\drivers.
+foreach ($p in @(Get-CbsofPackages)) {
+    pnputil /delete-driver $p /uninstall /force 2>&1 | Out-Null
+    "Removed old cbsof package $p from the driver store"
+}
+$stale = Join-Path $env:SystemRoot "System32\drivers\cbsof.sys"
+if (Test-Path $stale) {
+    Remove-Item $stale -Force -ErrorAction SilentlyContinue
+    if (Test-Path $stale) { "Note: $stale is in use; it is unused from 0.4.2 on." } else { "Removed old $stale" }
+}
 
 # Force our driver onto the DSP device (Coolstar's would otherwise outrank it).
 & $devcon update (Join-Path $here "cbsof\cbsof.inf") $hwid
 if ($LASTEXITCODE -gt 1) { throw "devcon update failed ($LASTEXITCODE)" }
-
-# Drop the older cbsof packages (the one now in use is new, so it is not in $old).
-foreach ($p in $old) {
-    pnputil /delete-driver $p 2>&1 | Out-Null
-    "Removed old cbsof package $p from the driver store"
-}
 
 Start-Sleep -Seconds 5
 Show-Log
