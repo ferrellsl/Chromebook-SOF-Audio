@@ -9,7 +9,7 @@ Signature   = "$Windows NT$"
 Class       = MEDIA
 ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
 Provider    = %ProviderName%
-DriverVer   = 11/14/2026,0.4.5.0
+DriverVer   = 11/14/2026,0.5.0.0
 CatalogFile = cbsof.cat
 PnpLockdown = 1
 
@@ -81,6 +81,21 @@ HKR,,CLSID,,%Proxy.CLSID%
 HKR,,FriendlyName,,%CBSOF.TopologySpeaker.szPname%
 HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
 
+[CBSOF.I.WaveHeadphones]
+AddReg = CBSOF.I.WaveHeadphones.AddReg
+
+[CBSOF.I.WaveHeadphones.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%CBSOF.WaveHeadphones.szPname%
+
+[CBSOF.I.TopologyHeadphones]
+AddReg = CBSOF.I.TopologyHeadphones.AddReg
+
+[CBSOF.I.TopologyHeadphones.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%CBSOF.TopologyHeadphones.szPname%
+HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+
 [CBSOF_SA.NT]
 Include = ks.inf,wdmaudio.inf
 Needs   = KS.Registration, WDMAUDIO.Registration
@@ -93,6 +108,11 @@ AddInterface = %KSCATEGORY_RENDER%,   %KSNAME_WaveSpeaker%,     CBSOF.I.WaveSpea
 AddInterface = %KSCATEGORY_REALTIME%, %KSNAME_WaveSpeaker%,     CBSOF.I.WaveSpeaker
 AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_TopologySpeaker%, CBSOF.I.TopologySpeaker
 AddInterface = %KSCATEGORY_TOPOLOGY%, %KSNAME_TopologySpeaker%, CBSOF.I.TopologySpeaker
+AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_WaveHeadphones%,     CBSOF.I.WaveHeadphones
+AddInterface = %KSCATEGORY_RENDER%,   %KSNAME_WaveHeadphones%,     CBSOF.I.WaveHeadphones
+AddInterface = %KSCATEGORY_REALTIME%, %KSNAME_WaveHeadphones%,     CBSOF.I.WaveHeadphones
+AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_TopologyHeadphones%, CBSOF.I.TopologyHeadphones
+AddInterface = %KSCATEGORY_TOPOLOGY%, %KSNAME_TopologyHeadphones%, CBSOF.I.TopologyHeadphones
 
 [CBSOF_SA.NT.Services]
 AddService = cbsof, 0x00000002, Cbsof_Service_Inst
@@ -120,6 +140,8 @@ KmdfLibraryVersion = $KMDFVERSION$
 [Strings]
 KSNAME_WaveSpeaker     = "WaveSpeaker"
 KSNAME_TopologySpeaker = "TopologySpeaker"
+KSNAME_WaveHeadphones     = "WaveHeadphones"
+KSNAME_TopologyHeadphones = "TopologyHeadphones"
 
 Proxy.CLSID          = "{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
 KSCATEGORY_AUDIO     = "{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
@@ -137,3 +159,5 @@ CBSOF.DeviceDesc = "Chromebook SOF Audio (open)"
 CBSOF.SvcDesc    = "Chromebook SOF Audio (open)"
 CBSOF.WaveSpeaker.szPname     = "Speakers"
 CBSOF.TopologySpeaker.szPname = "Speakers"
+CBSOF.WaveHeadphones.szPname     = "Headphones"
+CBSOF.TopologyHeadphones.szPname = "Headphones"

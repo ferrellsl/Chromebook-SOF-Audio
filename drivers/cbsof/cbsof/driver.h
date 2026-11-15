@@ -75,6 +75,7 @@ typedef struct _ADSP_BUS_INTERFACE {
 // Device context
 // ---------------------------------------------------------------------------
 #define CBSOF_LOG_SIZE 8192
+#define CBSOF_MAX_PCMS 8
 
 typedef struct _CBSOF_CONTEXT {
     PDEVICE_OBJECT Fdo;
@@ -125,7 +126,12 @@ typedef struct _CBSOF_CONTEXT {
 
     // Pipelines loaded from the topology blob
     BOOLEAN TopologyLoaded;
-    UINT32 SpeakerHostComp;
+    struct {
+        ULONG PcmId;
+        BOOLEAN Capture;
+        UINT32 HostComp;
+    } Pcms[CBSOF_MAX_PCMS];
+    ULONG NumPcms;
 
     BOOLEAN DspRunning;
     BOOLEAN GuardTripped;   // previous power-up crashed; DSP stays off

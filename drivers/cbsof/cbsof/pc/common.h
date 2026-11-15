@@ -124,6 +124,7 @@ typedef enum
 {
     eSpeakerDevice = 0,
     eMicArrayDevice1,
+    eHeadphoneDevice,       // cbsof: DA7219 headphone jack (SOF PCM 1)
     eMaxDeviceType,
 } eDeviceType;
 

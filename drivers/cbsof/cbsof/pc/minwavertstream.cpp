@@ -75,7 +75,11 @@ CMiniportWaveRTStream::Init
     }
     m_pMiniport->AddRef();
 
-    m_ulPcmId = m_bCapture ? SOF_PCM_DMIC : SOF_PCM_SPEAKERS;
+    if (m_bCapture) {
+        m_ulPcmId = SOF_PCM_DMIC;
+    } else {
+        m_ulPcmId = (m_pMiniport->m_DeviceType == eHeadphoneDevice) ? SOF_PCM_HEADSET : SOF_PCM_SPEAKERS;
+    }
 
     NTSTATUS ntStatus = m_pMiniport->StreamCreated(m_ulPin, this);
     if (NT_SUCCESS(ntStatus)) {

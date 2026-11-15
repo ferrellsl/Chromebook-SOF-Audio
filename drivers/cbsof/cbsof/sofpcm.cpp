@@ -122,7 +122,7 @@ typedef struct _CBTP_PCM {
 } CBTP_PCM;
 #pragma pack(pop)
 
-static NTSTATUS LoadTopology(PCBSOF_CONTEXT ctx, UINT32* speakerHost)
+static NTSTATUS LoadTopology(PCBSOF_CONTEXT ctx)
 {
     PUCHAR blob = NULL;
     ULONG size = 0;
@@ -139,12 +139,14 @@ static NTSTATUS LoadTopology(PCBSOF_CONTEXT ctx, UINT32* speakerHost)
         return STATUS_INVALID_IMAGE_FORMAT;
     }
 
-    *speakerHost = MAXULONG;
+    // Host component per (PCM id, direction), e.g. Speakers = (0, play)
+    ctx->NumPcms = 0;
     const CBTP_PCM* pcms = (const CBTP_PCM*)(blob + sizeof(*hdr));
-    for (ULONG i = 0; i < hdr->numPcms; i++) {
-        if (pcms[i].pcmId == 0 && pcms[i].direction == 0) {
-            *speakerHost = pcms[i].hostCompId;
-        }
+    for (ULONG i = 0; i < hdr->numPcms && ctx->NumPcms < CBSOF_MAX_PCMS; i++) {
+        ctx->Pcms[ctx->NumPcms].PcmId = pcms[i].pcmId;
+        ctx->Pcms[ctx->NumPcms].Capture = pcms[i].direction != 0;
+        ctx->Pcms[ctx->NumPcms].HostComp = pcms[i].hostCompId;
+        ctx->NumPcms++;
     }
 
     ULONG off = sizeof(*hdr) + hdr->numPcms * sizeof(CBTP_PCM);
@@ -168,7 +170,11 @@ static NTSTATUS LoadTopology(PCBSOF_CONTEXT ctx, UINT32* speakerHost)
         off += len;
     }
     if (NT_SUCCESS(status)) {
-        CbLog(ctx, "topology: %u messages accepted, speaker host comp %u", hdr->numMsgs, *speakerHost);
+        CbLog(ctx, "topology: %u messages accepted, %u PCMs", hdr->numMsgs, ctx->NumPcms);
+        for (ULONG i = 0; i < ctx->NumPcms; i++) {
+            CbLog(ctx, "  PCM %u %s -> host comp %u", ctx->Pcms[i].PcmId,
+                  ctx->Pcms[i].Capture ? "capture" : "playback", ctx->Pcms[i].HostComp);
+        }
     }
     ExFreePoolWithTag(blob, CBSOF_POOL_TAG);
     return status;
@@ -197,16 +203,25 @@ static void ApplyProcenFormatQuirk(PCBSOF_CONTEXT ctx, UINT8 tag, BOOLEAN playba
 // ---------------------------------------------------------------------------
 // Pipelines
 // ---------------------------------------------------------------------------
+// Host component for a PCM, or MAXULONG if the topology has none
+static UINT32 FindHostComp(PCBSOF_CONTEXT ctx, ULONG pcmId, BOOLEAN capture)
+{
+    for (ULONG i = 0; i < ctx->NumPcms; i++) {
+        if (ctx->Pcms[i].PcmId == pcmId && ctx->Pcms[i].Capture == capture) {
+            return ctx->Pcms[i].HostComp;
+        }
+    }
+    return MAXULONG;
+}
+
 NTSTATUS SofLoadTopology(PCBSOF_CONTEXT ctx)
 {
-    UINT32 speakerHost = MAXULONG;
     ctx->CodecEndpoints = 0;
     CsAudioNotify(ctx, CSAudioEndpointTypeDSP, CSAudioEndpointRegister);
     CbLog(ctx, "codec endpoints registered: mask 0x%X (bit1 = speaker amp)", ctx->CodecEndpoints);
 
-    NTSTATUS status = LoadTopology(ctx, &speakerHost);
-    ctx->TopologyLoaded = NT_SUCCESS(status) && speakerHost != MAXULONG;
-    ctx->SpeakerHostComp = speakerHost;
+    NTSTATUS status = LoadTopology(ctx);
+    ctx->TopologyLoaded = NT_SUCCESS(status) && FindHostComp(ctx, SOF_PCM_SPEAKERS, FALSE) != MAXULONG;
     if (!ctx->TopologyLoaded) {
         CbLog(ctx, "topology load failed 0x%08X", status);
         return NT_SUCCESS(status) ? STATUS_NOT_FOUND : status;
@@ -288,8 +303,10 @@ NTSTATUS SofPcmOpen(PSOF_PCM Pcm, ULONG PcmId, BOOLEAN Capture, PMDL Mdl, ULONG 
         return STATUS_DEVICE_NOT_READY;
     }
     Pcm->Instance = ctx->Instance;
-    if (Capture || PcmId != SOF_PCM_SPEAKERS) {
-        return STATUS_NOT_SUPPORTED;     // only the speaker pipeline exists so far
+    UINT32 hostComp = FindHostComp(ctx, PcmId, Capture);
+    if (hostComp == MAXULONG || Capture) {
+        CbLog(ctx, "SofPcmOpen: no %s pipeline for PCM %u", Capture ? "capture" : "playback", PcmId);
+        return STATUS_NOT_SUPPORTED;     // playback pipelines only so far
     }
     if (!Mdl || BufferBytes == 0 || (BufferBytes & (PAGE_SIZE - 1)) ||
         BitsPerSample != 16 || Channels != 2 || Rate != 48000) {
@@ -301,7 +318,7 @@ NTSTATUS SofPcmOpen(PSOF_PCM Pcm, ULONG PcmId, BOOLEAN Capture, PMDL Mdl, ULONG 
     if (pages > 256) {
         return STATUS_INVALID_BUFFER_SIZE;    // HDA BDL limit
     }
-    Pcm->HostComp = ctx->SpeakerHostComp;
+    Pcm->HostComp = hostComp;
     Pcm->Mdl = Mdl;
     Pcm->BufferBytes = BufferBytes;
 
@@ -387,7 +404,9 @@ NTSTATUS SofPcmRun(PSOF_PCM Pcm)
             return st;
         }
     }
-    if (!Pcm->AmpOn) {
+    // The MAX98357A speaker amp is switched by the CsAudio API; the DA7219
+    // headphone path is configured by its own driver and needs no call.
+    if (!Pcm->AmpOn && Pcm->PcmId == SOF_PCM_SPEAKERS) {
         CsAudioNotify(ctx, CSAudioEndpointTypeSpeaker, CSAudioEndpointStart);
         Pcm->AmpOn = TRUE;
     }

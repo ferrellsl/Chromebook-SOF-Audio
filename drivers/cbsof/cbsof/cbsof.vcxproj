@@ -69,6 +69,7 @@
     <ClCompile Include="pc\NewDelete.cpp" />
     <ClCompile Include="pc\kshelper.cpp" />
     <ClCompile Include="pc\speakertopo.cpp" />
+    <ClCompile Include="pc\headphonetopo.cpp" />
     <ClCompile Include="pc\micarraytopo.cpp" />
     <ClCompile Include="pc\hw.cpp" />
   </ItemGroup>
