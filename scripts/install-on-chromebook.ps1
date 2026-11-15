@@ -26,6 +26,9 @@ function Show-Log {
             "---- previous cbsof log (the start before this one) ($($k.PSChildName))"
             $p.CbsofLogPrevious
         }
+        if ($p.CbsofJack) {
+            "---- jack status: $($p.CbsofJack)"
+        }
         if ($p.CbsofLog) {
             "---- cbsof log ($($k.PSChildName))"
             $p.CbsofLog

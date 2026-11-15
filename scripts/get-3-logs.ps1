@@ -11,3 +11,5 @@ pnputil /enum-drivers | Select-String -Context 0,6 'cbsof' | Out-File (Join-Path
     Out-File (Join-Path $here "log.txt")
 
 "Done: setupapi.txt, packages.txt and log.txt are in $here"
+
+Get-PnpDevice | Where-Object { $_.InstanceId -match '2DCF|7219|DLGS' } | Format-Table Status, Class, FriendlyName, InstanceId -AutoSize | Out-File (Join-Path $here 'hid.txt') -Width 300

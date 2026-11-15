@@ -59,6 +59,28 @@ void CbLog(PCBSOF_CONTEXT ctx, const char* fmt, ...)
     }
 }
 
+// A one-line status value next to the log, e.g. "CbsofJack" (never scrolls out)
+void CbSetStatus(PCBSOF_CONTEXT ctx, PCWSTR valueName, const char* text)
+{
+    if (!ctx || !ctx->Pdo || KeGetCurrentIrql() != PASSIVE_LEVEL) {
+        return;
+    }
+    HANDLE key;
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(ctx->Pdo, PLUGPLAY_REGKEY_DEVICE, KEY_WRITE, &key))) {
+        return;
+    }
+    ANSI_STRING ansi;
+    RtlInitAnsiString(&ansi, text);
+    UNICODE_STRING value;
+    if (NT_SUCCESS(RtlAnsiStringToUnicodeString(&value, &ansi, TRUE))) {
+        UNICODE_STRING name;
+        RtlInitUnicodeString(&name, valueName);
+        ZwSetValueKey(key, &name, 0, REG_SZ, value.Buffer, value.Length + sizeof(WCHAR));
+        RtlFreeUnicodeString(&value);
+    }
+    ZwClose(key);
+}
+
 void CbFlushLog(PCBSOF_CONTEXT ctx)
 {
     if (!ctx || !ctx->Pdo || KeGetCurrentIrql() != PASSIVE_LEVEL) {
@@ -235,7 +257,7 @@ static NTSTATUS RefreshBusResources(PCBSOF_CONTEXT ctx)
     PUCHAR ourPpCap = FindPpCap(ctx, (PUCHAR)hdaBar.Base, hdaBar.Len);
     BOOLEAN busPpCapInBar = ppcap && (PUCHAR)ppcap >= (PUCHAR)hdaBar.Base &&
                             (PUCHAR)ppcap + 0x10 <= (PUCHAR)hdaBar.Base + hdaBar.Len;
-    CbLog(ctx, "HDA BAR %p len 0x%X, DSP BAR %p len 0x%X, PPCAP ours %p bus %p%s",
+    CbLogV(ctx, "HDA BAR %p len 0x%X, DSP BAR %p len 0x%X, PPCAP ours %p bus %p%s",
           hdaBar.Base, hdaBar.Len, dspBar.Base, dspBar.Len, ourPpCap, ppcap,
           busPpCapInBar ? "" : " (bus pointer is OUTSIDE the HDA BAR: stale)");
     if (!ourPpCap || !busPpCapInBar || (PUCHAR)ppcap != ourPpCap) {
@@ -356,10 +378,10 @@ NTSTATUS SofDevicePowerUp(void)
     }
 
     status = DspBoot(ctx);
-    CbLog(ctx, "DspBoot result 0x%08X", status);
+    CbLogV(ctx, "DspBoot result 0x%08X", status);
     if (NT_SUCCESS(status)) {
         status = DspIpcTest(ctx);
-        CbLog(ctx, "IPC round-trip test 0x%08X", status);
+        CbLogV(ctx, "IPC round-trip test 0x%08X", status);
     }
     if (NT_SUCCESS(status)) {
         status = SofLoadTopology(ctx);
@@ -367,6 +389,11 @@ NTSTATUS SofDevicePowerUp(void)
     ctx->DspRunning = NT_SUCCESS(status);
     if (ctx->DspRunning) {
         ctx->BootId++;
+        if (ctx->BootId > 1) {
+            CbLog(ctx, "DSP up again (boot %u)", ctx->BootId);
+        }
+    } else {
+        CbLog(ctx, "DSP power-up failed 0x%08X", status);
     }
     GuardWrite(ctx, 0);     // we survived the hardware access
     CbFlushLog(ctx);
@@ -420,7 +447,7 @@ NTSTATUS SofDeviceStart(PDEVICE_OBJECT Fdo)
     ctx->Fdo = Fdo;
     g_Cbsof = ctx;
 
-    CbLog(ctx, "cbsof 0.5.1 (PortCls): starting");
+    CbLog(ctx, "cbsof 0.5.2 (PortCls): starting");
 
     NTSTATUS status = PcGetPhysicalDeviceObject(Fdo, &ctx->Pdo);
     if (!NT_SUCCESS(status)) {

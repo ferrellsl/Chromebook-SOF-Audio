@@ -74,7 +74,7 @@ typedef struct _ADSP_BUS_INTERFACE {
 // ---------------------------------------------------------------------------
 // Device context
 // ---------------------------------------------------------------------------
-#define CBSOF_LOG_SIZE 8192
+#define CBSOF_LOG_SIZE 16384     // RtlAnsiStringToUnicodeString limit is 32K chars
 #define CBSOF_MAX_PCMS 8
 
 typedef struct _CBSOF_CONTEXT {
@@ -148,6 +148,11 @@ typedef struct _CBSOF_CONTEXT {
 // sofdevice.cpp
 void CbLog(PCBSOF_CONTEXT ctx, const char* fmt, ...);
 void CbFlushLog(PCBSOF_CONTEXT ctx);
+void CbSetStatus(PCBSOF_CONTEXT ctx, PCWSTR valueName, const char* text);   // REG_SZ in the device key
+
+// Detail lines only for the first DSP boot of a device start; later boots
+// (every idle wake-up) log one summary line instead.
+#define CbLogV(ctx, ...) do { if ((ctx) && (ctx)->BootId == 0) CbLog((ctx), __VA_ARGS__); } while (0)
 
 // dsp.cpp
 NTSTATUS DspBoot(PCBSOF_CONTEXT ctx);

@@ -312,7 +312,7 @@ NTSTATUS DspBoot(PCBSOF_CONTEXT ctx)
     KeClearEvent(&ctx->FwReadyEvent);
     KeClearEvent(&ctx->ReplyEvent);
 
-    CbLog(ctx, "boot: ADSPCS=0x%08X ROM status=0x%08X PPCTL=0x%08X",
+    CbLogV(ctx, "boot: ADSPCS=0x%08X ROM status=0x%08X PPCTL=0x%08X",
           DspRead(ctx, DSP_REG_ADSPCS), DspRead(ctx, DSP_SRAM_ROM_STATUS),
           READ_REGISTER_ULONG((volatile ULONG*)(ctx->PpCap + PP_PPCTL)));
 
@@ -345,10 +345,10 @@ NTSTATUS DspBoot(PCBSOF_CONTEXT ctx)
     ctx->DspBoxOffset = ctx->DspBoxSize = 0;
     ctx->StreamBoxOffset = ctx->StreamBoxSize = 0;
     ParseExtManifest(ctx, fw, fwSize);
-    CbLog(ctx, "manifest windows: host->dsp 0x%X/%u, dsp->host 0x%X/%u, stream 0x%X/%u",
+    CbLogV(ctx, "manifest windows: host->dsp 0x%X/%u, dsp->host 0x%X/%u, stream 0x%X/%u",
           ctx->HostBoxOffset, ctx->HostBoxSize, ctx->DspBoxOffset, ctx->DspBoxSize,
           ctx->StreamBoxOffset, ctx->StreamBoxSize);
-    CbLog(ctx, "firmware %u bytes, ext manifest 0x%X, payload %u bytes", fwSize, payloadOff, payloadSize);
+    CbLogV(ctx, "firmware %u bytes, ext manifest 0x%X, payload %u bytes", fwSize, payloadOff, payloadSize);
 
     // Code loader stream: 48 kHz, 32-bit, mono (HDA_CL_STREAM_FORMAT 0x40).
     fmt.SampleRate = 48000;
@@ -360,7 +360,7 @@ NTSTATUS DspBoot(PCBSOF_CONTEXT ctx)
         CbLog(ctx, "GetRenderStream failed 0x%08X", status);
         goto out;
     }
-    CbLog(ctx, "code loader stream tag %u", tag);
+    CbLogV(ctx, "code loader stream tag %u", tag);
 
     high.QuadPart = 0xFFFFFFFF;
     dmaBuf = (PUCHAR)MmAllocateContiguousMemorySpecifyCache(payloadSize, low, high, boundary, MmNonCached);
@@ -399,7 +399,7 @@ NTSTATUS DspBoot(PCBSOF_CONTEXT ctx)
 
     for (int i = 1; i <= DSP_FW_BOOT_ATTEMPTS; i++) {
         status = ClDspInit(ctx, tag);
-        CbLog(ctx, "ROM init attempt %d: 0x%08X", i, status);
+        CbLogV(ctx, "ROM init attempt %d: 0x%08X", i, status);
         if (NT_SUCCESS(status)) {
             break;
         }
@@ -411,7 +411,7 @@ NTSTATUS DspBoot(PCBSOF_CONTEXT ctx)
         status = PollRomState(ctx, FSR_STATE_FW_ENTERED, DSP_BASEFW_TIMEOUT_US, &v);
         ctx->Bus.TriggerDSP(ctx->Bus.Context, stream, FALSE);
         if (NT_SUCCESS(status)) {
-            CbLog(ctx, "firmware entered (status 0x%08X)", v);
+            CbLogV(ctx, "firmware entered (status 0x%08X)", v);
         } else {
             CbLog(ctx, "timeout waiting for FW_ENTERED: status 0x%08X error 0x%08X DMA pos %u",
                   v, DspRead(ctx, DSP_SRAM_ROM_ERROR),
@@ -437,10 +437,10 @@ NTSTATUS DspBoot(PCBSOF_CONTEXT ctx)
             status = STATUS_DEVICE_HARDWARE_ERROR;
         } else {
             const sof_ipc_fw_version* ver = &ctx->FwReadyMsg.version;
-            CbLog(ctx, "FW_READY: SOF %u.%u.%u build %u tag %.6s ABI 0x%08X date %.12s %.10s",
+            CbLogV(ctx, "FW_READY: SOF %u.%u.%u build %u tag %.6s ABI 0x%08X date %.12s %.10s",
                   ver->major, ver->minor, ver->micro, ver->build, (const char*)ver->tag,
                   ver->abi_version, (const char*)ver->date, (const char*)ver->time);
-            CbLog(ctx, "mailboxes: host->dsp 0x%X/%u, dsp->host 0x%X/%u, stream 0x%X/%u, irqs=%d",
+            CbLogV(ctx, "mailboxes: host->dsp 0x%X/%u, dsp->host 0x%X/%u, stream 0x%X/%u, irqs=%d",
                   ctx->HostBoxOffset, ctx->HostBoxSize, ctx->DspBoxOffset, ctx->DspBoxSize,
                   ctx->StreamBoxOffset, ctx->StreamBoxSize, ctx->IrqCount);
         }
@@ -732,7 +732,7 @@ NTSTATUS DspIpcTest(PCBSOF_CONTEXT ctx)
         return status;
     }
     const sof_ipc_reply* reply = (const sof_ipc_reply*)ctx->ReplyBuf;
-    CbLog(ctx, "PM_CTX_SIZE reply: cmd 0x%08X size %u error %d",
+    CbLogV(ctx, "PM_CTX_SIZE reply: cmd 0x%08X size %u error %d",
           reply->hdr.cmd, reply->hdr.size, reply->error);
     // Any well-formed reply proves the round trip, even an error code.
     return (reply->hdr.cmd & SOF_GLB_TYPE_MASK) == SOF_IPC_GLB_REPLY ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;

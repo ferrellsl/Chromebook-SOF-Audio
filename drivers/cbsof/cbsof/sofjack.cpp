@@ -1,7 +1,7 @@
 // cbsof: headphone jack detection.
 //
 // Coolstar's DA7219 driver (coolstar/da7219, Apache-2.0) reports the jack as
-// a HID device, VID 0x2DCF PID 0x7219. Its second (vendor, usage page 0xFF00)
+// a HID device (HID\DLGS7219&COL01/COL02 on Bobba). Its second (vendor, usage page 0xFF00)
 // collection carries input report 2 = { 2, ControlCode, ControlValue } with
 // ControlCode 1 = jack type (0 = nothing, bit 0 = headphone, bit 1 = mic),
 // and writing output report { 2, x } makes it re-send the current state.
@@ -54,6 +54,7 @@ static void JackLog(const char* fmt, ...)
     RtlStringCbVPrintfA(line, sizeof(line), fmt, args);
     va_end(args);
     CbLog(g_Cbsof, "jack: %s", line);
+    CbSetStatus(g_Cbsof, L"CbsofJack", line);   // latest jack status, never scrolls out
 }
 
 BOOLEAN SofHeadphoneConnected(void)
@@ -179,6 +180,7 @@ static VOID JackThread(PVOID StartContext)
                 }
                 break;
             }
+            JackLog("report %02X %02X %02X (%u bytes)", report[0], report[1], report[2], (ULONG)riosb.Information);
             if (riosb.Information >= DA7219_IN_REPORT_BYTES &&
                 report[0] == DA7219_REPORTID_SPECKEYS && report[1] == DA7219_CONTROL_JACK_TYPE) {
                 SetJackState((report[2] & DA7219_JACK_HEADPHONE) != 0);
@@ -234,11 +236,23 @@ static NTSTATUS JackPnpCallback(PVOID NotificationStructure, PVOID Context)
     if (!IsEqualGUID(n->Event, GUID_DEVICE_INTERFACE_ARRIVAL) || g_Stopping) {
         return STATUS_SUCCESS;
     }
-    // The vendor collection of the DA7219 HID device is its second one.
-    if (!ContainsNoCase(n->SymbolicLinkName, L"VID_2DCF&PID_7219") ||
+    BOOLEAN related = ContainsNoCase(n->SymbolicLinkName, L"2DCF") ||
+                      ContainsNoCase(n->SymbolicLinkName, L"7219") ||
+                      ContainsNoCase(n->SymbolicLinkName, L"DLGS");
+    if (related) {
+        CHAR name[200];
+        RtlStringCbPrintfA(name, sizeof(name), "%wZ", n->SymbolicLinkName);
+        JackLog("HID interface seen: %s", name);
+    }
+    // The vendor collection of the DA7219 HID device is its second one. On
+    // Bobba it is named after the ACPI ID: HID\DLGS7219&COL02 (seen
+    // 2026-11-14); VID_2DCF&PID_7219 is accepted too in case another build names it that way.
+    if (!(ContainsNoCase(n->SymbolicLinkName, L"DLGS7219") ||
+          ContainsNoCase(n->SymbolicLinkName, L"VID_2DCF&PID_7219")) ||
         !ContainsNoCase(n->SymbolicLinkName, L"COL02")) {
         return STATUS_SUCCESS;
     }
+    JackLog("matched the DA7219 vendor collection");
     if (n->SymbolicLinkName->Length >= sizeof(g_LinkName)) {
         return STATUS_SUCCESS;
     }
@@ -272,6 +286,8 @@ NTSTATUS SofJackStart(PDRIVER_OBJECT DriverObject)
     if (!NT_SUCCESS(status)) {
         JackLog("IoRegisterPlugPlayNotification failed 0x%08X; no jack detection", status);
         g_NotifyHandle = NULL;
+    } else if (!g_ThreadHandle) {
+        JackLog("watching for the DA7219 jack device (not present yet)");
     }
     return status;
 }

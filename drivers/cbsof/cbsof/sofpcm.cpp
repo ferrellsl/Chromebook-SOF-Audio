@@ -170,9 +170,9 @@ static NTSTATUS LoadTopology(PCBSOF_CONTEXT ctx)
         off += len;
     }
     if (NT_SUCCESS(status)) {
-        CbLog(ctx, "topology: %u messages accepted, %u PCMs", hdr->numMsgs, ctx->NumPcms);
+        CbLogV(ctx, "topology: %u messages accepted, %u PCMs", hdr->numMsgs, ctx->NumPcms);
         for (ULONG i = 0; i < ctx->NumPcms; i++) {
-            CbLog(ctx, "  PCM %u %s -> host comp %u", ctx->Pcms[i].PcmId,
+            CbLogV(ctx, "  PCM %u %s -> host comp %u", ctx->Pcms[i].PcmId,
                   ctx->Pcms[i].Capture ? "capture" : "playback", ctx->Pcms[i].HostComp);
         }
     }
@@ -218,7 +218,7 @@ NTSTATUS SofLoadTopology(PCBSOF_CONTEXT ctx)
 {
     ctx->CodecEndpoints = 0;
     CsAudioNotify(ctx, CSAudioEndpointTypeDSP, CSAudioEndpointRegister);
-    CbLog(ctx, "codec endpoints registered: mask 0x%X (bit1 = speaker amp)", ctx->CodecEndpoints);
+    CbLogV(ctx, "codec endpoints registered: mask 0x%X (bit1 = speaker amp)", ctx->CodecEndpoints);
 
     NTSTATUS status = LoadTopology(ctx);
     ctx->TopologyLoaded = NT_SUCCESS(status) && FindHostComp(ctx, SOF_PCM_SPEAKERS, FALSE) != MAXULONG;
