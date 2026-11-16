@@ -5,7 +5,7 @@ Open Windows 10/11 audio drivers for Intel **Gemini Lake** Chromebooks running
 per-device activation: the whole stack is open source.
 
 **Works:** speakers, headphones, the headset microphone and the built-in
-microphones, with automatic switching when a headset is plugged in or out.
+microphones, with automatic switching when a headset is plugged/unplugged.
 
 HDMI / DisplayPort audio is not part of this package: it goes through the
 Intel Display Audio driver that Windows installs on its own, and keeps working
@@ -35,7 +35,11 @@ audio DSP (PCI `8086:3198`).
 
 The drivers are **test-signed**, so the installer turns on Windows test
 signing (`bcdedit /set testsigning on`) and trusts this project's test
-certificate. Windows then shows "Test Mode" on the desktop.
+certificate. Windows then shows the "Test Mode" watermark on the desktop.  
+If the watermark annoys you as it does me, check out UWD, the Universal
+Watermark Disabler here: https://github.com/pr701/universal-watermark-disabler
+Or, send me some cash and I'll pay Microsoft's fee to get the driver digitally
+signed.
 
 If CoolStar's audio driver is installed, the installer takes over the audio
 DSP device from it; uninstalling (Settings > Apps) gives it back. The bus and
